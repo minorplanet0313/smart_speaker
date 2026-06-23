@@ -1,0 +1,125 @@
+# ============================================================
+# Smart Speaker - 主配置文件
+# ============================================================
+
+# --- 通用设置 ---
+general:
+  name: "小智音箱"
+  wake_word: "小智小智"
+  language: "zh-CN"
+  sample_rate: 16000
+  log_level: "INFO"          # DEBUG | INFO | WARNING | ERROR
+  data_dir: "./data"
+
+# --- 音频设置 ---
+audio:
+  sample_rate: 16000
+  channels: 1
+  chunk_size: 1024           # 每次读取的帧数 (小值 = 低延迟, 大值 = 低CPU)
+  format: "int16"            # int16 | float32
+  device:
+    microphone: null         # null = 系统默认, 或指定设备名
+    speaker: null            # null = 系统默认
+  vad:
+    enabled: true
+    threshold: 0.5           # 语音检测阈值 [0, 1]
+    min_speech_duration_ms: 250   # 最短语音时长
+    min_silence_duration_ms: 800  # 静音判定时长 (尾端点检测)
+    max_speech_duration_ms: 15000 # 最长录音时长 (防超时)
+    speech_pad_ms: 200       # 语音前后填充
+
+# --- 唤醒词检测 ---
+wake_word:
+  enabled: true
+  engine: "openwakeword"
+  model_path: "./models/openwakeword/xiao_zhi.onnx"  # 自定义唤醒词模型
+  threshold: 0.5            # 检测阈值 [0, 1]
+  cooldown_ms: 2000         # 触发后冷却时间 (防重复触发)
+  inference_framework: "onnx"  # onnx | tflite
+
+# --- 语音识别 (ASR) ---
+asr:
+  primary: "vosk"            # vosk | cloud
+  fallback: "cloud"          # 降级方案
+  vosk:
+    model_path: "./models/vosk-model-small-cn-0.22"
+    sample_rate: 16000
+    words_list: null         # 可选: 自定义词典提升特殊词汇识别
+  cloud:
+    provider: "baidu"        # baidu | aliyun
+    baidu:
+      app_id: "${BAIDU_APP_ID}"
+      api_key: "${BAIDU_API_KEY}"
+      secret_key: "${BAIDU_SECRET_KEY}"
+    aliyun:
+      access_key_id: "${ALIYUN_ACCESS_KEY_ID}"
+      access_key_secret: "${ALIYUN_ACCESS_KEY_SECRET}"
+      app_key: "${ALIYUN_APP_KEY}"
+
+# --- 大语言模型 (LLM) ---
+llm:
+  provider: "deepseek"
+  model: "deepseek-chat"
+  api_key: "${DEEPSEEK_API_KEY}"
+  base_url: "https://api.deepseek.com"
+  max_tokens: 1024
+  temperature: 0.7
+  stream: true               # 流式输出 (降低首字延迟)
+  timeout_seconds: 30
+  retry:
+    max_retries: 3
+    backoff_base: 2
+
+# --- 语音合成 (TTS) ---
+tts:
+  primary: "edge"            # edge | piper
+  fallback: "piper"          # 离线降级
+  edge:
+    voice: "zh-CN-XiaoxiaoNeural"  # 晓晓(女声, 自然)
+    rate: "+0%"              # 语速: -50% ~ +100%
+    pitch: "+0Hz"            # 音调
+    proxy: null              # 代理设置
+  piper:
+    model_path: "./models/piper-voices/zh_CN-huayan-medium.onnx"
+    config_path: null
+
+# --- 对话上下文 ---
+conversation:
+  max_history_rounds: 20     # 最大对话轮数
+  context_timeout_seconds: 300  # 上下文过期时间 (5分钟)
+  system_prompt: |
+    你是一个智能语音助手，名叫"小智"。你的特点是：
+    1. 回答简洁明了，适合语音交互（不要太长）
+    2. 语气友好、自然，像朋友聊天
+    3. 支持中文，偶尔可以使用英文词汇
+    4. 如果不确定答案，诚实地告诉用户
+    5. 回答控制在 100 字以内，除非用户要求详细解释
+
+# --- 技能设置 ---
+skills:
+  auto_discover: true
+  builtin_enabled:
+    - "chat"        # 通用聊天 (LLM)
+    - "time"        # 时间查询
+    - "weather"     # 天气查询
+  weather:
+    api_key: "${WEATHER_API_KEY}"    # 和风天气 API Key
+    city: "auto"                     # auto = 基于 IP 定位
+
+# --- GPIO 设置 (可选) ---
+gpio:
+  enabled: false
+  led:
+    enabled: true
+    pin: 17              # GPIO17 (BCM编号)
+    type: "rgb"          # single | rgb
+  button:
+    enabled: true
+    mute_pin: 22         # GPIO22 - 静音按钮
+    action_pin: 23       # GPIO23 - 快捷操作按钮
+
+# --- 性能设置 ---
+performance:
+  onnx_threads: 2        # ONNX Runtime 线程数 (Pi3 推荐 2)
+  audio_buffer_seconds: 0.5  # 音频环形缓冲区大小
+  gc_threshold: 1000     # 垃圾回收阈值

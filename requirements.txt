@@ -1,0 +1,42 @@
+# ============================================================
+# Smart Speaker - Python Dependencies
+# Platform: Raspberry Pi 3B+, Python 3.9+
+# ============================================================
+
+# --- Core Audio ---
+pyaudio==0.2.14
+numpy==1.26.4
+
+# --- Wake Word Detection ---
+openwakeword==0.6.0
+onnxruntime==1.18.0
+
+# --- Voice Activity Detection ---
+silero-vad==5.1
+
+# --- ASR (Speech-to-Text) ---
+vosk==0.3.45
+
+# --- LLM (DeepSeek) ---
+openai==1.35.0          # DeepSeek 兼容 OpenAI SDK
+
+# --- TTS (Text-to-Speech) ---
+edge-tts==6.1.12
+# piper-tts==1.2.0      # 可选: 本地离线 TTS (需要额外安装)
+
+# --- GPIO (Optional) ---
+# RPi.GPIO==0.7.1       # Pi 5 用 gpiozero
+gpiozero==2.0.1
+
+# --- Utilities ---
+PyYAML==6.0.2
+python-dotenv==1.0.1
+soundfile==0.12.1
+scipy==1.13.1          # 音频处理
+
+# --- HTTP / API ---
+requests==2.32.3
+httpx==0.27.0
+
+# --- Logging ---
+colorlog==6.8.2

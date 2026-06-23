@@ -1,0 +1,61 @@
+[Unit]
+Description=Smart Speaker Voice Assistant
+Documentation=https://github.com/yourname/smart-speaker
+After=network-online.target sound.target pulseaudio.service
+Wants=network-online.target sound.target
+Requires=pulseaudio.service
+
+[Service]
+Type=simple
+User=pi
+Group=pi
+WorkingDirectory=/home/pi/smart_speaker
+
+# 环境变量
+Environment="PATH=/home/pi/smart_speaker_venv/bin:/usr/local/bin:/usr/bin:/bin"
+Environment="PULSE_RUNTIME_PATH=/run/user/1000/pulse"
+Environment="HOME=/home/pi"
+Environment="SMART_SPEAKER_CONFIG=/home/pi/smart_speaker/config/config.yaml"
+
+# 从 .env 文件加载 API Key (如果存在)
+EnvironmentFile=-/home/pi/smart_speaker/.env
+
+# 启动前等待网络和音频系统就绪
+ExecStartPre=/bin/sleep 10
+ExecStartPre=/bin/bash -c 'until ping -c1 -W2 8.8.8.8 >/dev/null 2>&1; do sleep 5; done'
+
+# 启动
+ExecStart=/home/pi/smart_speaker_venv/bin/python src/main.py --config config/config.yaml
+
+# 优雅关闭
+ExecStop=/bin/kill -SIGTERM $MAINPID
+KillSignal=SIGTERM
+TimeoutStopSec=10
+
+# 崩溃自动重启
+Restart=on-failure
+RestartSec=5
+StartLimitInterval=300
+StartLimitBurst=5
+
+# 日志
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=smart-speaker
+
+# 安全加固
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/home/pi/smart_speaker/data
+ReadWritePaths=/home/pi/smart_speaker/models
+ReadWritePaths=/tmp
+
+# 实时调度 (音频需要)
+CPUSchedulingPolicy=rr
+CPUSchedulingPriority=50
+Nice=-10
+
+[Install]
+WantedBy=multi-user.target

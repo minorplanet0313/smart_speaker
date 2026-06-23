@@ -1,0 +1,50 @@
+# ============================================================
+# Smart Speaker — .gitignore
+# ============================================================
+
+# 敏感信息
+.env
+*.key
+*.pem
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+*.egg-info/
+dist/
+build/
+.eggs/
+
+# 虚拟环境
+venv/
+smart_speaker_venv/
+env/
+
+# AI 模型 (太大, 单独下载)
+models/
+*.onnx
+*.tflite
+
+# 数据
+data/logs/
+data/conversations/
+data/cache/
+*.log
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# 系统文件
+.DS_Store
+Thumbs.db
+
+# 临时文件
+/tmp/
+*.tmp
+*.temp
