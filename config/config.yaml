@@ -22,7 +22,7 @@ audio:
     speaker: null            # null = 系统默认
   vad:
     enabled: true
-    threshold: 0.5           # 语音检测阈值 [0, 1]
+    threshold: 0.4           # 语音检测阈值 [0, 1] (x86_64 可适当降低)
     min_speech_duration_ms: 250   # 最短语音时长
     min_silence_duration_ms: 800  # 静音判定时长 (尾端点检测)
     max_speech_duration_ms: 15000 # 最长录音时长 (防超时)
@@ -32,7 +32,7 @@ audio:
 wake_word:
   enabled: true
   engine: "openwakeword"
-  model_path: "./models/openwakeword/xiao_zhi.onnx"  # 自定义唤醒词模型
+  model_path: "./models/openwakeword/alexa_v0.1.onnx"  # 验证用: alexa 模型 (中文唤醒词需自行训练)
   threshold: 0.5            # 检测阈值 [0, 1]
   cooldown_ms: 2000         # 触发后冷却时间 (防重复触发)
   inference_framework: "onnx"  # onnx | tflite

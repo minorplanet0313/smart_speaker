@@ -166,8 +166,29 @@ class VoiceActivityDetector:
     def _is_speech_silero(self, audio_frame: np.ndarray) -> bool:
         """使用 Silero VAD 模型检测"""
         try:
-            # Silero VAD 输入要求: float32, 16kHz, shape=(N,)
-            speech_prob = self._model(audio_frame, self.sample_rate).item()
+            # silero-vad 5.x 要求精确 512 帧 @16kHz (或 256 @8kHz)
+            # 累积帧到内部 buffer，达到 512 帧后推理
+            if not hasattr(self, '_silero_buffer'):
+                self._silero_buffer = np.array([], dtype=np.float32)
+            self._silero_buffer = np.append(self._silero_buffer, audio_frame)
+
+            # 需要 512 帧（16kHz） 或 256 帧（8kHz）
+            required_samples = 512 if self.sample_rate == 16000 else 256
+            if len(self._silero_buffer) < required_samples:
+                # 还不够，用能量检测临时判断
+                return self._is_speech_energy(audio_frame)
+
+            # 取 512 帧
+            chunk = self._silero_buffer[:required_samples]
+            self._silero_buffer = self._silero_buffer[required_samples:]
+
+            # silero-vad 5.x 需要 PyTorch tensor
+            try:
+                speech_prob = self._model(chunk, self.sample_rate).item()
+            except AttributeError:
+                import torch
+                tensor = torch.from_numpy(chunk)
+                speech_prob = self._model(tensor, self.sample_rate).item()
             return speech_prob > self.threshold
         except Exception as e:
             logger.error(f"Silero VAD 推理失败: {e}")

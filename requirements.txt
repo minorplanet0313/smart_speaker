@@ -26,7 +26,7 @@ edge-tts==6.1.12
 
 # --- GPIO (Optional) ---
 # RPi.GPIO==0.7.1       # Pi 5 用 gpiozero
-gpiozero==2.0.1
+# gpiozero==2.0.1  # Pi-only, disabled for x86_64 laptop
 
 # --- Utilities ---
 PyYAML==6.0.2
