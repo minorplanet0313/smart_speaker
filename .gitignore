@@ -22,15 +22,17 @@ venv/
 smart_speaker_venv/
 env/
 
-# AI 模型 (太大, 单独下载)
+# AI 模型 (大的忽略, 小的唤醒词模型追踪)
 models/
-*.onnx
-*.tflite
+!models/openwakeword/
+!models/openwakeword/*.onnx
+!models/openwakeword/*.tflite
 
 # 数据
 data/logs/
 data/conversations/
 data/cache/
+data/debug_audio/
 *.log
 
 # IDE
@@ -48,3 +50,5 @@ Thumbs.db
 /tmp/
 *.tmp
 *.temp
+1.txt
+.python-version
