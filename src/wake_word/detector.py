@@ -119,6 +119,15 @@ class WakeWordDetector:
         # 累积音频缓冲
         self._audio_buffer = np.append(self._audio_buffer, audio_frame)
 
+        # 每约 2 秒打印一次音频能量 (调试用)
+        if not hasattr(self, '_debug_sample_count'):
+            self._debug_sample_count = 0
+            self._debug_rms_sum = 0.0
+            self._debug_predict_count = 0
+            self._debug_max_score = 0.0
+        self._debug_sample_count += len(audio_frame)
+        self._debug_rms_sum += float(np.sqrt(np.mean(np.square(audio_frame))) if len(audio_frame) > 0 else 0.0)
+
         # 等累积到足够的样本数再做推理
         if len(self._audio_buffer) >= self._samples_per_chunk:
             # 取出一个 chunk
@@ -127,12 +136,27 @@ class WakeWordDetector:
 
             try:
                 # openWakeWord 推理
-                # 输入要求: shape=(n_models, 1280) 类型的 float32
-                # 对于 80ms chunk @ 16kHz: 1280 samples
                 predictions = self._model.predict(chunk)
+                self._debug_predict_count += 1
 
                 # predictions 是 dict: {model_name: score}
                 for model_name, score in predictions.items():
+                    if score > self._debug_max_score:
+                        self._debug_max_score = score
+                    # 每 ~2 秒输出一次诊断信息
+                    if self._debug_sample_count >= 32000:  # ~2s of audio
+                        avg_rms = self._debug_rms_sum / (self._debug_sample_count / len(audio_frame)) if len(audio_frame) > 0 else 0
+                        logger.debug(
+                            f"唤醒诊断: 已处理 {self._debug_sample_count/16000:.1f}s 音频, "
+                            f"RMS={avg_rms:.4f}, predict次数={self._debug_predict_count}, "
+                            f"当前分数={score:.4f}, 最高分数={self._debug_max_score:.4f}, "
+                            f"阈值={self.threshold}"
+                        )
+                        self._debug_sample_count = 0
+                        self._debug_rms_sum = 0.0
+                        self._debug_predict_count = 0
+                        self._debug_max_score = 0.0
+
                     if score > self.threshold:
                         self._on_trigger(score)
                         return score

@@ -29,7 +29,7 @@ class Config:
         if _HAS_DOTENV:
             env_file = Path(".env")
             if env_file.exists():
-                load_dotenv(env_file)
+                load_dotenv(env_file, override=True)
 
         if config_path:
             self.load(config_path)

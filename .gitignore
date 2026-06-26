@@ -23,7 +23,7 @@ smart_speaker_venv/
 env/
 
 # AI 模型 (大的忽略, 小的唤醒词模型追踪)
-models/
+models/*
 !models/openwakeword/
 !models/openwakeword/*.onnx
 !models/openwakeword/*.tflite

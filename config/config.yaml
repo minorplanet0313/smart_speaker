@@ -32,10 +32,10 @@ audio:
 wake_word:
   enabled: true
   engine: "openwakeword"
-  model_path: "./models/openwakeword/xiao_zhi.tflite"  # 中文唤醒词 "小智" (社区预训练模型)
+  model_path: "./models/openwakeword/xiao_zhi.onnx"  # 中文唤醒词 "小智" (社区预训练模型)
   threshold: 0.5            # 检测阈值 [0, 1]
   cooldown_ms: 2000         # 触发后冷却时间 (防重复触发)
-  inference_framework: "tflite"  # tflite (树莓派推荐) | onnx
+  inference_framework: "onnx"  # onnx | tflite
 
 # --- 语音识别 (ASR) ---
 asr:

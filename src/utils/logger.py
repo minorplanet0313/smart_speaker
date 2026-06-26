@@ -4,6 +4,11 @@
 使用场景:
 - 开发: DEBUG 级别, 彩色输出到控制台
 - 生产: INFO 级别, 输出到文件和 journald
+
+Logger 层级:
+  所有模块使用 get_logger(__name__), 返回 "smart_speaker.xxx" 格式的 logger,
+  统一继承自 "smart_speaker" 根 logger。调用 setup_logger 后, 所有子 logger
+  自动继承根 logger 的级别和 handlers。
 """
 
 import logging
@@ -12,30 +17,36 @@ from logging.handlers import RotatingFileHandler
 from pathlib import Path
 from typing import Optional
 
+ROOT_LOGGER_NAME = "smart_speaker"
+
 
 def setup_logger(
-    name: str = "smart_speaker",
+    name: str = ROOT_LOGGER_NAME,
     level: str = "INFO",
     log_dir: Optional[str] = None,
     to_file: bool = True,
     to_console: bool = True,
 ) -> logging.Logger:
     """
-    配置并返回 logger
+    配置根 logger (smart_speaker) 的 handlers 和级别。
+    只应调用一次。后续调用会更新级别但不重复添加 handlers。
 
     Args:
-        name: logger 名称
+        name: logger 名称 (默认 smart_speaker)
         level: 日志级别 (DEBUG|INFO|WARNING|ERROR)
         log_dir: 日志文件目录 (默认 ./data/logs)
         to_file: 是否输出到文件
         to_console: 是否输出到控制台
     """
     logger = logging.getLogger(name)
-    logger.setLevel(getattr(logging, level.upper(), logging.INFO))
 
-    # 避免重复添加 handler
+    # 已有 handler 时: 不覆盖级别 (保留已设置的, 如命令行 --log-level),
+    # 但重置子 logger 让它们继承根 logger
     if logger.handlers:
+        _reset_child_levels(name)
         return logger
+
+    logger.setLevel(getattr(logging, level.upper(), logging.INFO))
 
     # 日志格式
     formatter = logging.Formatter(
@@ -63,12 +74,30 @@ def setup_logger(
         file_handler.setFormatter(formatter)
         logger.addHandler(file_handler)
 
+    # 抑制第三方库的 DEBUG 日志
+    for lib in ("urllib3", "requests", "httpx", "httpcore", "openwakeword"):
+        logging.getLogger(lib).setLevel(logging.WARNING)
+
     return logger
 
 
-def get_logger(name: str = "smart_speaker") -> logging.Logger:
-    """获取 logger (确保已初始化)"""
-    logger = logging.getLogger(name)
-    if not logger.handlers:
-        return setup_logger(name)
-    return logger
+def get_logger(name: str = ROOT_LOGGER_NAME) -> logging.Logger:
+    """
+    获取子 logger。所有模块应使用 get_logger(__name__),
+    返回的 logger 会继承 smart_speaker 根 logger 的配置。
+
+    例如: get_logger("src.wake_word.detector") → logger "smart_speaker.src.wake_word.detector"
+    """
+    if name == ROOT_LOGGER_NAME or name.startswith(ROOT_LOGGER_NAME + "."):
+        return logging.getLogger(name)
+    return logging.getLogger(f"{ROOT_LOGGER_NAME}.{name}")
+
+
+def _reset_child_levels(root_name: str) -> None:
+    """重置所有子 logger 的级别为 NOTSET, 让它们继承根 logger"""
+    prefix = root_name + "."
+    for name in logging.root.manager.loggerDict:
+        if name.startswith(prefix):
+            child = logging.getLogger(name)
+            if child.level != logging.NOTSET:
+                child.setLevel(logging.NOTSET)
