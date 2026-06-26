@@ -22,27 +22,27 @@ audio:
     speaker: null            # null = 系统默认
   vad:
     enabled: true
-    threshold: 0.4           # 语音检测阈值 [0, 1] (x86_64 可适当降低)
-    min_speech_duration_ms: 250   # 最短语音时长
-    min_silence_duration_ms: 800  # 静音判定时长 (尾端点检测)
+    threshold: 0.3           # 语音检测阈值 [0, 1] (降低以捕捉轻声)
+    min_speech_duration_ms: 150   # 最短语音时长 (降低以捕捉短词)
+    min_silence_duration_ms: 600  # 静音判定时长 (尾端点检测, 降低响应更快)
     max_speech_duration_ms: 15000 # 最长录音时长 (防超时)
-    speech_pad_ms: 200       # 语音前后填充
+    speech_pad_ms: 400       # 语音前后填充 (增加以保留词首词尾)
 
 # --- 唤醒词检测 ---
 wake_word:
   enabled: true
   engine: "openwakeword"
-  model_path: "./models/openwakeword/alexa_v0.1.onnx"  # 验证用: alexa 模型 (中文唤醒词需自行训练)
+  model_path: "./models/openwakeword/xiao_zhi.tflite"  # 中文唤醒词 "小智" (社区预训练模型)
   threshold: 0.5            # 检测阈值 [0, 1]
   cooldown_ms: 2000         # 触发后冷却时间 (防重复触发)
-  inference_framework: "onnx"  # onnx | tflite
+  inference_framework: "tflite"  # tflite (树莓派推荐) | onnx
 
 # --- 语音识别 (ASR) ---
 asr:
   primary: "vosk"            # vosk | cloud
   fallback: "cloud"          # 降级方案
   vosk:
-    model_path: "./models/vosk-model-small-cn-0.22"
+    model_path: "./models/vosk-model-cn-0.22"  # 大模型 (1.3GB, 准确率更高)
     sample_rate: 16000
     words_list: null         # 可选: 自定义词典提升特殊词汇识别
   cloud:
@@ -75,7 +75,7 @@ tts:
   primary: "edge"            # edge | piper
   fallback: "piper"          # 离线降级
   edge:
-    voice: "zh-CN-XiaoxiaoNeural"  # 晓晓(女声, 自然)
+    voice: "zh-CN-liaoning-XiaobeiNeural"  # 东北话
     rate: "+0%"              # 语速: -50% ~ +100%
     pitch: "+0Hz"            # 音调
     proxy: null              # 代理设置
@@ -91,9 +91,11 @@ conversation:
     你是一个智能语音助手，名叫"小智"。你的特点是：
     1. 回答简洁明了，适合语音交互（不要太长）
     2. 语气友好、自然，像朋友聊天
-    3. 支持中文，偶尔可以使用英文词汇
-    4. 如果不确定答案，诚实地告诉用户
-    5. 回答控制在 100 字以内，除非用户要求详细解释
+    3. 说话带东北口音，性格豪爽幽默，像东北老铁
+    4. 常用东北词汇：嘎哈、咋地、整一个、得劲儿、老好使了
+    5. 支持中文，偶尔可以使用英文词汇
+    6. 如果不确定答案，诚实地告诉用户
+    7. 回答控制在 100 字以内，除非用户要求详细解释
 
 # --- 技能设置 ---
 skills:

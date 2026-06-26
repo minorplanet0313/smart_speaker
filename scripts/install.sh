@@ -146,15 +146,15 @@ step "Step 6/7: 下载 AI 模型"
 MODELS_DIR="$PROJECT_DIR/models"
 mkdir -p "$MODELS_DIR"
 
-# 6a. Vosk 中文小模型 (42MB)
-VOSK_MODEL_DIR="$MODELS_DIR/vosk-model-small-cn-0.22"
+# 6a. Vosk 中文大模型 (1.3GB, 准确率更高)
+VOSK_MODEL_DIR="$MODELS_DIR/vosk-model-cn-0.22"
 if [ -d "$VOSK_MODEL_DIR" ]; then
     info "Vosk 模型已存在: $VOSK_MODEL_DIR"
 else
-    info "下载 Vosk 中文模型 (42MB)..."
+    info "下载 Vosk 中文大模型 (1.3GB)..."
     cd "$MODELS_DIR"
     wget -q --show-progress \
-        "https://alphacephei.com/vosk/models/vosk-model-small-cn-0.22.zip" \
+        "https://alphacephei.com/vosk/models/vosk-model-cn-0.22.zip" \
         -O vosk-model.zip
     unzip -q vosk-model.zip
     rm vosk-model.zip

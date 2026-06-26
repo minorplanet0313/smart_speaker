@@ -2,15 +2,15 @@
 Vosk 本地 ASR 实现
 
 基于 Vosk 的离线语音识别
-- 模型: vosk-model-small-cn-0.22 (42MB)
-- 内存占用: ~80-120MB
-- 延迟: 150-400ms (Pi 3)
-- 准确率: ~85% (中文短句)
+- 模型: vosk-model-cn-0.22 (1.3GB, 大模型, 准确率更高)
+- 内存占用: ~1.5-2GB
+- 延迟: 300-800ms (Pi 3)
+- 准确率: ~92% (中文短句)
 
 安装:
     pip install vosk
-    wget https://alphacephei.com/vosk/models/vosk-model-small-cn-0.22.zip
-    unzip vosk-model-small-cn-0.22.zip -d models/
+    wget https://alphacephei.com/vosk/models/vosk-model-cn-0.22.zip
+    unzip vosk-model-cn-0.22.zip -d models/
 """
 
 import json
@@ -31,7 +31,7 @@ class VoskASR(BaseASR):
 
     def __init__(
         self,
-        model_path: str = "models/vosk-model-small-cn-0.22",
+        model_path: str = "models/vosk-model-cn-0.22",
         sample_rate: int = 16000,
     ):
         """
@@ -43,6 +43,7 @@ class VoskASR(BaseASR):
         self.sample_rate = sample_rate
         self._model = None
         self._vosk = None
+        self._recognizer = None  # 复用识别器提升准确率
         self._init_model()
 
     def _init_model(self) -> None:
@@ -55,8 +56,8 @@ class VoskASR(BaseASR):
                 logger.warning(
                     f"Vosk 模型未找到: {self.model_path}\n"
                     f"请下载模型:\n"
-                    f"  wget https://alphacephei.com/vosk/models/vosk-model-small-cn-0.22.zip\n"
-                    f"  unzip vosk-model-small-cn-0.22.zip -d models/"
+                    f"  wget https://alphacephei.com/vosk/models/vosk-model-cn-0.22.zip\n"
+                    f"  unzip vosk-model-cn-0.22.zip -d models/"
                 )
                 return
 
@@ -98,8 +99,14 @@ class VoskASR(BaseASR):
         else:
             audio_int16 = audio_data.astype(np.int16)
 
-        # 创建识别器
-        recognizer = self._vosk.KaldiRecognizer(self._model, self.sample_rate)
+        # 创建或复用识别器 (复用可保持上下文, 提升准确率)
+        if self._recognizer is None:
+            self._recognizer = self._vosk.KaldiRecognizer(self._model, self.sample_rate)
+            self._recognizer.SetWords(True)
+        else:
+            self._recognizer.Reset()
+            self._recognizer.SetWords(True)
+        recognizer = self._recognizer
 
         # 送入音频数据
         # Vosk 需要完整的音频数据, 分块送入

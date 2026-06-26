@@ -147,7 +147,7 @@ class SmartSpeakerEngine:
         asr_config = self.config.get("asr", {})
         vosk_config = asr_config.get("vosk", {})
         self.asr = VoskASR(
-            model_path=vosk_config.get("model_path", "models/vosk-model-small-cn-0.22"),
+            model_path=vosk_config.get("model_path", "models/vosk-model-cn-0.22"),
             sample_rate=vosk_config.get("sample_rate", 16000),
         )
         if self.asr.is_available:
@@ -302,6 +302,25 @@ class SmartSpeakerEngine:
             now = time.time()
             if now < self._wake_word_cooldown_until:
                 return
+            # 每 ~5 秒打印音频电平 (确认麦克风在工作)
+            if not hasattr(self, '_audio_level_debug_time'):
+                self._audio_level_debug_time = 0.0
+                self._audio_level_samples = 0
+                self._audio_level_rms_sum = 0.0
+            self._audio_level_samples += 1
+            self._audio_level_rms_sum += float(
+                np.sqrt(np.mean(np.square(audio_frame)))
+            )
+            if now - self._audio_level_debug_time >= 5.0:
+                avg_rms = self._audio_level_rms_sum / max(self._audio_level_samples, 1)
+                logger.info(
+                    f"🎤 音频电平: RMS={avg_rms:.4f} "
+                    f"({'正常' if avg_rms > 0.001 else '⚠️ 太弱/无声!'}) "
+                    f"[{self._audio_level_samples} 帧/5s]"
+                )
+                self._audio_level_debug_time = now
+                self._audio_level_samples = 0
+                self._audio_level_rms_sum = 0.0
             # 喂给唤醒词检测器
             self.wake_word_detector.detect(audio_frame)
 
@@ -360,6 +379,9 @@ class SmartSpeakerEngine:
         audio_data = np.concatenate(self._speech_audio_buffer)
         self._speech_audio_buffer = []
 
+        # 保存录制音频到文件 (调试用)
+        self._save_debug_audio(audio_data)
+
         # 异步执行 ASR (在单独线程中)
         threading.Thread(
             target=self._do_asr,
@@ -373,7 +395,10 @@ class SmartSpeakerEngine:
         try:
             result = self.asr.transcribe(audio_data, 16000)
             if result and result.text.strip():
-                logger.info(f"ASR 结果: \"{result.text}\"")
+                logger.info(
+                    f"ASR 结果: \"{result.text}\" "
+                    f"(置信度={result.confidence:.2f})"
+                )
                 self.event_bus.publish(
                     Event.ASR_RESULT,
                     source="asr",
@@ -416,10 +441,13 @@ class SmartSpeakerEngine:
             # 技能失败, 使用错误提示
             logger.error(f"技能执行失败: {result.error_message}")
             self._do_tts("抱歉, 出了点问题, 请再试一次")
+        elif result and result.success and result.needs_llm:
+            # ChatSkill 兜底: 需要 LLM 处理
+            self._do_llm(text)
         else:
-            # 需要 LLM 处理 (ChatSkill 的路由)
-            # LLM 调用由 ChatSkill 内部触发, 通过事件总线返回结果
-            pass
+            # 无法处理
+            logger.warning(f"未找到合适的技能处理: \"{text}\"")
+            self._do_tts("抱歉, 我不太明白你的意思")
 
     def _on_llm_stream_chunk(self, event_data) -> None:
         """LLM 流式输出块: 累积文本 (用于调试/显示)"""
@@ -437,6 +465,74 @@ class SmartSpeakerEngine:
 
         logger.info(f"LLM 响应: \"{text[:100]}{'...' if len(text) > 100 else ''}\"")
         self._do_tts(text)
+
+    def _save_debug_audio(self, audio_data: np.ndarray) -> None:
+        """保存录制音频到文件 (调试用)"""
+        try:
+            import wave
+            from pathlib import Path
+            debug_dir = Path(
+                self.config.get("general.data_dir", "data") + "/debug_audio"
+            )
+            debug_dir.mkdir(parents=True, exist_ok=True)
+            import time as _time
+            filename = debug_dir / f"speech_{_time.strftime('%Y%m%d_%H%M%S')}.wav"
+            audio_int16 = (np.clip(audio_data, -1.0, 1.0) * 32767).astype(np.int16)
+            with wave.open(str(filename), 'wb') as wf:
+                wf.setnchannels(1)
+                wf.setsampwidth(2)
+                wf.setframerate(16000)
+                wf.writeframes(audio_int16.tobytes())
+            logger.info(f"📝 录音已保存: {filename} "
+                        f"({len(audio_data)/16000:.1f}s, RMS={np.sqrt(np.mean(np.square(audio_data))):.4f})")
+        except Exception as e:
+            logger.error(f"保存调试音频失败: {e}")
+
+    def _do_llm(self, text: str) -> None:
+        """执行 LLM 调用 (异步)"""
+        threading.Thread(
+            target=self._do_llm_sync,
+            args=(text,),
+            daemon=True,
+            name="llm-thread",
+        ).start()
+
+    def _do_llm_sync(self, text: str) -> None:
+        """同步执行 LLM 调用"""
+        try:
+            # 添加用户消息到上下文
+            self.conversation_context.add_user_message(text)
+
+            # 获取历史消息
+            messages = self.conversation_context.get_messages()
+
+            # 调用 LLM (流式)
+            logger.info(f"调用 LLM: \"{text[:50]}...\"")
+            full_response = ""
+            for delta in self.llm.chat_stream(messages):
+                full_response += delta
+
+            if not full_response:
+                logger.warning("LLM 返回空响应")
+                self.state_machine.transition(State.IDLE)
+                return
+
+            logger.info(f"LLM 响应: \"{full_response[:100]}...\"")
+
+            # 添加助手消息到上下文
+            self.conversation_context.add_assistant_message(full_response)
+
+            # 发布 LLM 响应事件
+            self.event_bus.publish(
+                Event.LLM_RESPONSE,
+                source="llm",
+                text=full_response,
+            )
+        except Exception as e:
+            logger.error(f"LLM 调用失败: {e}")
+            self.event_bus.publish(
+                Event.LLM_ERROR, source="llm", error=str(e)
+            )
 
     def _do_tts(self, text: str) -> None:
         """执行 TTS 合成 (异步)"""
@@ -521,6 +617,147 @@ class SmartSpeakerEngine:
                 if self.audio_player:
                     self.audio_player.stop()
             self.state_machine.force_idle()
+
+    # ================================================================
+    # 键盘唤醒模式
+    # ================================================================
+
+    def enable_keyboard_wake_mode(self) -> None:
+        """启用键盘唤醒模式: 按回车触发唤醒, 然后用语音对话"""
+        self._keyboard_wake_mode = True
+        self._stdin_thread = threading.Thread(
+            target=self._keyboard_wake_loop,
+            daemon=True,
+            name="keyboard-wake",
+        )
+        self._stdin_thread.start()
+
+    def _keyboard_wake_loop(self) -> None:
+        """键盘唤醒读取循环"""
+        while not self._running:
+            time.sleep(0.1)
+
+        print("=" * 50)
+        print("⌨️  键盘唤醒模式已启用")
+        print("   按 回车 唤醒我, 然后对麦克风说话")
+        print("   输入 /quit 或 Ctrl+C 退出")
+        print("=" * 50)
+
+        try:
+            while self._running:
+                try:
+                    user_input = input("\n⏎ 按回车唤醒 > ").strip()
+                except (EOFError, KeyboardInterrupt):
+                    break
+
+                if user_input.lower() in ("/quit", "/exit", "/q"):
+                    logger.info("用户请求退出")
+                    self.stop()
+                    break
+
+                # 按回车触发唤醒 (不管输入什么都当作唤醒)
+                if self.state_machine.current_state == State.SPEAKING and self.audio_player:
+                    logger.info("打断当前播放 (barge-in)")
+                    self.audio_player.stop()
+                    self.event_bus.publish(Event.PLAYBACK_INTERRUPTED, source="engine")
+
+                self._speech_audio_buffer = []
+
+                if self.state_machine.transition(State.LISTENING):
+                    logger.info("⌨️  键盘唤醒!")
+                    self.event_bus.publish(
+                        Event.WAKE_WORD_DETECTED,
+                        source="keyboard_wake",
+                        confidence=1.0,
+                    )
+                else:
+                    logger.warning(f"无法唤醒, 当前状态: {self.state_machine.current_state.value}")
+        except Exception as e:
+            logger.error(f"键盘唤醒循环异常: {e}")
+
+    # ================================================================
+    # 键盘输入模式
+    # ================================================================
+
+    def enable_stdin_mode(self) -> None:
+        """启用键盘输入模式: 在独立线程中读取 stdin, 直接处理文字指令"""
+        self._stdin_mode = True
+        self._stdin_thread = threading.Thread(
+            target=self._stdin_loop,
+            daemon=True,
+            name="stdin-input",
+        )
+        self._stdin_thread.start()
+
+    def _stdin_loop(self) -> None:
+        """stdin 读取循环"""
+        # 等待引擎启动
+        while not self._running:
+            time.sleep(0.1)
+
+        print("=" * 50)
+        print("📝 键盘输入模式已启用")
+        print("   输入文字指令后按回车, 系统将直接处理")
+        print("   输入 /quit 或 Ctrl+C 退出")
+        print("=" * 50)
+
+        try:
+            while self._running:
+                try:
+                    user_input = input("\n💬 > ").strip()
+                except (EOFError, KeyboardInterrupt):
+                    break
+
+                if not user_input:
+                    continue
+
+                if user_input.lower() in ("/quit", "/exit", "/q"):
+                    logger.info("用户请求退出")
+                    self.stop()
+                    break
+
+                # 直接处理文字输入 (模拟 ASR 结果)
+                # 模拟唤醒流程: IDLE → LISTENING → THINKING
+                logger.info(f"⌨️  文字输入: \"{user_input}\"")
+
+                # 先切到 LISTENING (模拟唤醒)
+                if self.state_machine.current_state == State.IDLE:
+                    if not self.state_machine.transition(State.LISTENING):
+                        logger.warning(f"无法切换到 LISTENING 状态")
+                        continue
+
+                # 再切到 THINKING (模拟语音结束)
+                if self.state_machine.current_state == State.LISTENING:
+                    if not self.state_machine.transition(State.THINKING):
+                        logger.warning(f"无法切换到 THINKING 状态")
+                        continue
+                elif self.state_machine.current_state != State.THINKING:
+                    logger.warning(
+                        f"当前状态 {self.state_machine.current_state.value} "
+                        f"无法处理输入")
+                    continue
+
+                # 通过技能管理器处理
+                context = SkillContext(
+                    conversation_id=self.conversation_context.current_conversation_id,
+                )
+                result = self.skill_manager.execute(user_input, context)
+
+                if result and result.success and result.response_text:
+                    # 技能直接返回响应, 不需要 LLM
+                    logger.info(f"技能直接响应: \"{result.response_text}\"")
+                    self._do_tts(result.response_text)
+                elif result and not result.success:
+                    logger.error(f"技能执行失败: {result.error_message}")
+                    self._do_tts("抱歉, 出了点问题, 请再试一次")
+                elif result and result.success and result.needs_llm:
+                    # ChatSkill 兜底: 需要 LLM 处理
+                    self._do_llm(user_input)
+                else:
+                    logger.warning(f"无法处理输入: \"{user_input}\"")
+                    self._do_tts("抱歉, 我不太明白你的意思")
+        except Exception as e:
+            logger.error(f"stdin 循环异常: {e}")
 
     # ================================================================
     # 主循环

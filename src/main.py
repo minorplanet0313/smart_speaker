@@ -65,6 +65,18 @@ def parse_args():
         metavar="AUDIO_FILE",
         help="测试 ASR 识别 (指定音频文件)",
     )
+    parser.add_argument(
+        "--stdin", "--text",
+        action="store_true",
+        dest="stdin_mode",
+        help="键盘输入模式 (输入文字代替语音, 跳过唤醒和 ASR)",
+    )
+    parser.add_argument(
+        "--keyboard-wake", "--kw",
+        action="store_true",
+        dest="keyboard_wake",
+        help="键盘唤醒模式 (按回车唤醒, 然后用语音对话)",
+    )
 
     return parser.parse_args()
 
@@ -106,7 +118,7 @@ def cmd_test_asr(audio_file: str):
     from src.utils.config import get_config
 
     config = get_config()
-    model_path = config.get("asr.vosk.model_path", "models/vosk-model-small-cn-0.22")
+    model_path = config.get("asr.vosk.model_path", "models/vosk-model-cn-0.22")
 
     print(f"\n🎤 测试 ASR: {audio_file}")
     print(f"   模型路径: {model_path}")
@@ -115,7 +127,7 @@ def cmd_test_asr(audio_file: str):
     asr = VoskASR(model_path=model_path)
     if not asr.is_available:
         print("❌ Vosk 模型不可用, 请先下载模型")
-        print("   wget https://alphacephei.com/vosk/models/vosk-model-small-cn-0.22.zip")
+        print("   wget https://alphacephei.com/vosk/models/vosk-model-cn-0.22.zip")
         return
 
     import time
@@ -158,8 +170,18 @@ def main():
     engine = SmartSpeakerEngine(config_path=args.config)
     engine.setup()
 
-    print(f"\n✅ 初始化完成, 唤醒词: 小智小智")
-    print("💡 说 '小智小智' 来唤醒我\n")
+    if args.stdin_mode:
+        # 键盘输入模式: 跳过唤醒词和语音识别, 直接输入文字
+        engine.enable_stdin_mode()
+    elif args.keyboard_wake:
+        # 键盘唤醒模式: 键盘触发唤醒, 语音对话
+        engine.enable_keyboard_wake_mode()
+    else:
+        wake_word = engine.config.get("general.wake_word", "小智小智")
+        print(f"\n✅ 初始化完成, 唤醒词: {wake_word}")
+        print(f"💡 说 '{wake_word}' 来唤醒我")
+        print(f"💡 或使用 python src/main.py --stdin 进入文本输入模式")
+        print(f"💡 或使用 python src/main.py --keyboard-wake 进入键盘唤醒模式\n")
 
     try:
         engine.run_forever()
