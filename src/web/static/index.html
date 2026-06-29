@@ -398,7 +398,7 @@ document.addEventListener('alpine:init', () => {
     applyState(s) {
       if (!s) return;
       this.state = s;
-      this.audioPct = Math.min(1, (s.audio_rms || 0) / 0.1);
+      this.audioPct = Math.min(1, (s.audio_rms || 0) / 0.5);
       this.applySystem(s.system);
       if (s.messages) {
         const prev = this.messages.length;

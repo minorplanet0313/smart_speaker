@@ -93,7 +93,7 @@ class WebEventCollector:
     def _update_snapshot(self, event: Event, data: dict) -> None:
         s = self._state_snapshot
         if event == Event.STATE_CHANGED:
-            s["state"] = data.get("to", s["state"])
+            s["state"] = data.get("to_state", s["state"])
             s["state_duration_ms"] = 0
         elif event == Event.WAKE_WORD_DETECTED:
             s["last_wake_confidence"] = data.get("confidence", 0)

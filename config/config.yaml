@@ -82,8 +82,8 @@ gpio:
 llm:
   api_key: ${DEEPSEEK_API_KEY}
   base_url: https://api.deepseek.com
-  max_tokens: 1024
-  model: deepseek-chat
+  max_tokens: 4096
+  model: deepseek-v4-pro
   provider: deepseek
   retry:
     backoff_base: 2
