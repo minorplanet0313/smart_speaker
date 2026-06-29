@@ -23,6 +23,7 @@ from src.audio.capture import AudioCapture
 from src.audio.player import AudioPlayer
 from src.audio.vad import VADState, VoiceActivityDetector
 from src.wake_word.detector import WakeWordDetector
+from src.wake_word.porcupine_detector import PorcupineDetector
 from src.asr.vosk_asr import VoskASR
 from src.asr.cloud_asr import CloudASR
 from src.audio.preprocessing import preprocess_pipeline
@@ -163,9 +164,24 @@ class SmartSpeakerEngine:
             logger.info("VAD 已禁用")
 
     def _init_wake_word(self) -> None:
-        """初始化唤醒词检测"""
+        """初始化唤醒词检测 (openWakeWord 或 Porcupine)"""
         ww_config = self.config.get("wake_word", {})
-        if ww_config.get("enabled", True):
+        if not ww_config.get("enabled", True):
+            return
+
+        engine = ww_config.get("engine", "openwakeword")
+
+        if engine == "porcupine":
+            self.wake_word_detector = PorcupineDetector(
+                access_key=ww_config.get("porcupine_access_key", ""),
+                keyword=ww_config.get("porcupine_keyword", "porcupine"),
+                keyword_path=ww_config.get("porcupine_keyword_path", ""),
+                sensitivity=ww_config.get("threshold", 0.7),
+                model_path=ww_config.get("porcupine_model_path", ""),
+            )
+            logger.info(f"唤醒词检测 (Porcupine) 初始化完成, "
+                        f"keyword={ww_config.get('porcupine_keyword', 'porcupine')}")
+        else:
             self.wake_word_detector = WakeWordDetector(
                 model_path=ww_config.get("model_path", ""),
                 threshold=ww_config.get("threshold", 0.5),
