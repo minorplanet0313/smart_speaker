@@ -10,9 +10,11 @@ API 文档: https://platform.deepseek.com/api-docs
 """
 
 import functools
+import os
 import time
 from typing import Dict, Iterator, List, Optional
 
+import httpx
 from openai import OpenAI
 
 from src.llm.base import BaseLLM, LLMResponse
@@ -94,10 +96,25 @@ class DeepSeekLLM(BaseLLM):
         self._max_retries = max_retries
         self._backoff_base = backoff_base
 
+        # 使用显式的 httpx 客户端, 避免环境变量中的 SOCKS 代理导致启动失败
+        # httpx 不支持 socks:// 协议的代理, 但系统的 ALL_PROXY 可能设置了 socks
+        # 临时清除 ALL_PROXY / all_proxy 以避免 httpx 报错 (保留 http_proxy/https_proxy)
+        saved_all_proxy = os.environ.pop("ALL_PROXY", None)
+        saved_all_proxy_lower = os.environ.pop("all_proxy", None)
+        try:
+            http_client = httpx.Client(
+                timeout=httpx.Timeout(timeout),
+            )
+        finally:
+            if saved_all_proxy is not None:
+                os.environ["ALL_PROXY"] = saved_all_proxy
+            if saved_all_proxy_lower is not None:
+                os.environ["all_proxy"] = saved_all_proxy_lower
+
         self._client = OpenAI(
             api_key=api_key,
             base_url=base_url,
-            timeout=timeout,
+            http_client=http_client,
         )
 
         logger.info(f"DeepSeek 客户端初始化: model={model}, base_url={base_url}")

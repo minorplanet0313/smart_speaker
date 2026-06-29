@@ -747,16 +747,18 @@ class SmartSpeakerEngine:
 
     def _on_llm_response(self, event_data) -> None:
         """LLM 完成响应: 非流式模式下触发 TTS"""
-        if event_data.get("streamed"):
-            return
-
         text = event_data.get("text", "").strip()
+        if text:
+            logger.info(f"LLM 响应: \"{text[:100]}{'...' if len(text) > 100 else ''}\"")
+
+        if event_data.get("streamed"):
+            return  # 流式模式已在 _do_llm_streaming 中逐句播放 TTS
+
         if not text:
             logger.warning("LLM 返回空文本")
             self.state_machine.transition(State.IDLE)
             return
 
-        logger.info(f"LLM 响应: \"{text[:100]}{'...' if len(text) > 100 else ''}\"")
         self._do_tts(text)
 
     def _save_debug_audio(self, audio_data: np.ndarray) -> None:
@@ -863,6 +865,10 @@ class SmartSpeakerEngine:
                 return
 
             self.conversation_context.add_assistant_message(full_response)
+            logger.info(
+                f"LLM 响应 (流式): \"{full_response[:100]}"
+                f"{'...' if len(full_response) > 100 else ''}\""
+            )
             self.event_bus.publish(
                 Event.LLM_RESPONSE,
                 source="llm",

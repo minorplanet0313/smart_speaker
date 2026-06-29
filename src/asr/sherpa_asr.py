@@ -69,7 +69,7 @@ class SherpaASR(BaseASR):
         self._init_model()
 
     def _init_model(self) -> None:
-        """加载 sherpa-onnx 模型"""
+        """加载 sherpa-onnx 模型 (使用 v1.13+ 工厂方法 API)"""
         try:
             import sherpa_onnx
             self._sherpa_onnx = sherpa_onnx
@@ -78,43 +78,43 @@ class SherpaASR(BaseASR):
                         "安装: pip install sherpa-onnx>=1.10")
             return
 
-        model_file = os.path.join(self.model_dir, "model.onnx")
+        # 模型目录结构:
+        #   - tokens.txt
+        #   - encoder-epoch-99-avg-1.int8.onnx (推荐 int8 量化, 快)
+        #   - decoder-epoch-99-avg-1.onnx
+        #   - joiner-epoch-99-avg-1.int8.onnx (推荐 int8 量化, 快)
         tokens_file = os.path.join(self.model_dir, "tokens.txt")
+        encoder_file = os.path.join(self.model_dir, "encoder-epoch-99-avg-1.int8.onnx")
+        decoder_file = os.path.join(self.model_dir, "decoder-epoch-99-avg-1.onnx")
+        joiner_file = os.path.join(self.model_dir, "joiner-epoch-99-avg-1.int8.onnx")
 
-        if not os.path.exists(model_file):
+        if not os.path.exists(tokens_file):
             logger.warning(
-                f"sherpa-onnx 模型未找到: {model_file}\n"
+                f"sherpa-onnx 模型未找到: {self.model_dir}\n"
                 f"请下载模型:\n"
                 f"  wget https://github.com/k2-fsa/sherpa-onnx/releases/download/"
-                f"asr-models/sherpa-onnx-streaming-zipformer-zh-14M-2025-06-30.tar.bz2\n"
-                f"  tar xvf sherpa-onnx-streaming-zipformer-zh-14M-2025-06-30.tar.bz2 "
-                f"-d models/"
+                f"asr-models/sherpa-onnx-streaming-zipformer-zh-14M-2023-02-23.tar.bz2\n"
+                f"  tar xvf sherpa-onnx-streaming-zipformer-zh-14M-2023-02-23.tar.bz2 "
+                f"-C models/"
             )
             return
 
         try:
             logger.info(f"加载 sherpa-onnx 模型: {self.model_dir} ...")
 
-            config = sherpa_onnx.OnlineRecognizerConfig(
-                feat_config=sherpa_onnx.FeatureExtractorConfig(
-                    sampling_rate=self.sample_rate,
-                    feature_dim=80,
-                ),
-                model_config=sherpa_onnx.OnlineModelConfig(
-                    zipformer2_ctc=sherpa_onnx.OnlineZipformer2CtcModelConfig(
-                        model=model_file,
-                    ),
-                    tokens=tokens_file,
-                    num_threads=self.num_threads,
-                    provider="cpu",
-                    decoding_method=self.decoding_method,
-                ),
+            self._model = sherpa_onnx.OnlineRecognizer.from_transducer(
+                tokens=tokens_file,
+                encoder=encoder_file,
+                decoder=decoder_file,
+                joiner=joiner_file,
+                sample_rate=self.sample_rate,
+                num_threads=self.num_threads,
+                decoding_method=self.decoding_method,
                 # 禁用内建端点检测 — 使用项目 Silero VAD
-                enable_endpoint=False,
-                max_active_paths=4,
+                enable_endpoint_detection=False,
+                provider="cpu",
+                model_type="zipformer",
             )
-
-            self._model = sherpa_onnx.OnlineRecognizer(config)
             logger.info(
                 f"sherpa-onnx 模型加载完成 "
                 f"(threads={self.num_threads}, decoder={self.decoding_method})"

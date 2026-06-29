@@ -93,22 +93,26 @@ class PiperTTS(BaseTTS):
         start_time = time.time()
 
         try:
+            import io
             import wave
 
             # 加载语音模型 (首次调用时加载, 后续复用缓存)
             voice = self._load_voice()
 
-            # 合成
+            # 合成 (piper-tts >= 1.4: synthesize 返回 Iterable[AudioChunk])
             audio_data = bytearray()
-            for audio_bytes in voice.synthesize_stream_raw(text):
-                audio_data.extend(audio_bytes)
+            sample_rate = 22050  # 默认值
+            for chunk in voice.synthesize(text):
+                if hasattr(chunk, 'audio_int16_bytes'):
+                    audio_data.extend(chunk.audio_int16_bytes)
+                sample_rate = chunk.sample_rate
 
-            # 写入 WAV 格式 (Piper 输出原始 PCM)
-            wav_buf = bytearray()
+            # 写入 WAV 格式 (Piper 输出原始 PCM int16)
+            wav_buf = io.BytesIO()
             with wave.open(wav_buf, 'wb') as wf:
                 wf.setnchannels(1)
                 wf.setsampwidth(2)  # 16-bit
-                wf.setframerate(voice.config.sample_rate)
+                wf.setframerate(sample_rate)
                 wf.writeframes(audio_data)
 
             latency_ms = (time.time() - start_time) * 1000
@@ -116,9 +120,9 @@ class PiperTTS(BaseTTS):
             logger.debug(f"Piper TTS 合成完成: \"{text[:50]}...\" ({latency_ms:.0f}ms)")
 
             return TTSResult(
-                audio_data=bytes(wav_buf),
+                audio_data=wav_buf.getvalue(),
                 format="wav",
-                sample_rate=voice.config.sample_rate,
+                sample_rate=sample_rate,
                 latency_ms=latency_ms,
             )
 
@@ -134,8 +138,9 @@ class PiperTTS(BaseTTS):
         try:
             voice = self._load_voice()
 
-            for audio_bytes in voice.synthesize_stream_raw(text):
-                yield audio_bytes
+            for chunk in voice.synthesize(text):
+                if hasattr(chunk, 'audio_int16_bytes'):
+                    yield chunk.audio_int16_bytes
 
         except Exception as e:
             logger.error(f"Piper 流式合成失败: {e}")

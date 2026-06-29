@@ -27,7 +27,7 @@ vosk==0.3.45
 openai==1.35.0          # DeepSeek 兼容 OpenAI SDK
 
 # --- TTS (Text-to-Speech) ---
-edge-tts==6.1.12
+edge-tts>=7.2
 # piper-tts==1.2.0      # 可选: 本地离线 TTS (需要额外安装)
 
 # --- GPIO (Optional) ---
