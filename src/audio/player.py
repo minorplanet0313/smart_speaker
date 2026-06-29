@@ -294,8 +294,15 @@ class AudioPlayer:
         return signal.resample(samples, num_target)
 
     def _find_output_device(self) -> Optional[int]:
-        """查找输出设备"""
+        """查找输出设备 (优先精确匹配，避免 \"default\" 匹配到 \"sysdefault\")"""
         if self.device_name:
+            # 第一轮：精确匹配
+            for i in range(self._pa.get_device_count()):
+                info = self._pa.get_device_info_by_index(i)
+                if (info.get("name", "").strip() == self.device_name and
+                        info.get("maxOutputChannels", 0) > 0):
+                    return i
+            # 第二轮：模糊匹配
             for i in range(self._pa.get_device_count()):
                 info = self._pa.get_device_info_by_index(i)
                 if (self.device_name in info.get("name", "") and

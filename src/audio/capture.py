@@ -81,16 +81,26 @@ class AudioCapture:
         self._pyaudio = pyaudio
         self._pa = pyaudio.PyAudio()
 
-        # 查找输入设备
+        # 查找输入设备 (优先精确匹配，避免 "default" 匹配到 "sysdefault")
         device_index = None
         if self.device_name:
+            # 第一轮：精确匹配
             for i in range(self._pa.get_device_count()):
                 info = self._pa.get_device_info_by_index(i)
-                if (self.device_name in info.get("name", "") and
+                if (info.get("name", "").strip() == self.device_name and
                         info.get("maxInputChannels", 0) > 0):
                     device_index = i
                     logger.info(f"使用指定麦克风: {info['name']} (index={i})")
                     break
+            # 第二轮：模糊匹配
+            if device_index is None:
+                for i in range(self._pa.get_device_count()):
+                    info = self._pa.get_device_info_by_index(i)
+                    if (self.device_name in info.get("name", "") and
+                            info.get("maxInputChannels", 0) > 0):
+                        device_index = i
+                        logger.info(f"使用指定麦克风 (模糊匹配): {info['name']} (index={i})")
+                        break
             if device_index is None:
                 logger.warning(f"未找到麦克风设备 '{self.device_name}', "
                                f"使用系统默认")

@@ -29,8 +29,8 @@ audio:
   channels: 1
   chunk_size: 1024
   device:
-    microphone: default
-    speaker: default
+    microphone: pulse
+    speaker: pulse
   format: int16
   sample_rate: 16000
   vad:
