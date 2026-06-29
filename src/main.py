@@ -114,7 +114,9 @@ def cmd_list_voices():
 
 def cmd_test_asr(audio_file: str):
     """测试 ASR 识别"""
+    import numpy as np
     from src.asr.vosk_asr import VoskASR
+    from src.audio.preprocessing import preprocess_pipeline
     from src.utils.config import get_config
 
     config = get_config()
@@ -130,14 +132,34 @@ def cmd_test_asr(audio_file: str):
         print("   wget https://alphacephei.com/vosk/models/vosk-model-cn-0.22.zip")
         return
 
+    import soundfile as sf
     import time
-    start = time.time()
-    result = asr.transcribe_file(audio_file)
-    elapsed = time.time() - start
 
-    print(f"   识别结果: \"{result.text}\"")
-    print(f"   置信度:   {result.confidence:.3f}")
-    print(f"   耗时:     {elapsed:.2f}s")
+    audio, sr = sf.read(audio_file, dtype='float32')
+    if audio.ndim > 1:
+        audio = audio.mean(axis=1)
+
+    # 对比: 原始 vs 预处理后
+    print(f"\n   原始音频: {len(audio)/sr:.1f}s, "
+          f"RMS={np.sqrt(np.mean(np.square(audio))):.4f}")
+
+    # 预处理
+    audio_processed = preprocess_pipeline(audio, sample_rate=sr)
+    print(f"   预处理后: RMS={np.sqrt(np.mean(np.square(audio_processed))):.4f}, "
+          f"峰值={np.max(np.abs(audio_processed)):.3f}")
+
+    # 原始音频识别
+    start = time.time()
+    result_raw = asr.transcribe(audio, sample_rate=sr)
+    elapsed_raw = time.time() - start
+
+    # 预处理后识别
+    start = time.time()
+    result_proc = asr.transcribe(audio_processed, sample_rate=sr)
+    elapsed_proc = time.time() - start
+
+    print(f"\n   原始识别: \"{result_raw.text}\" (置信度={result_raw.confidence:.3f}, {elapsed_raw:.2f}s)")
+    print(f"   预处理后: \"{result_proc.text}\" (置信度={result_proc.confidence:.3f}, {elapsed_proc:.2f}s)")
 
 
 def main():

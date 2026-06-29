@@ -24,6 +24,7 @@ from src.audio.vad import VADState, VoiceActivityDetector
 from src.wake_word.detector import WakeWordDetector
 from src.asr.base import ASRResult
 from src.asr.vosk_asr import VoskASR
+from src.audio.preprocessing import PreprocessConfig, preprocess_pipeline
 from src.llm.deepseek import DeepSeekLLM
 from src.llm.context import ConversationContext
 from src.tts.edge_tts import EdgeTTS
@@ -75,6 +76,9 @@ class SmartSpeakerEngine:
         self._audio_buffer = bytearray()
         self._speech_audio_buffer: list = []  # 当前语音片段的音频块
         self._wake_word_cooldown_until = 0.0
+        self._asr_incremental_mode = True  # 边听边识别模式 (降低感知延迟)
+        self._asr_preprocess = True        # 音频预处理 (提升识别准确率)
+        self._asr_final_text = ""  # 增量 ASR 累积的最终文本
 
         # 注册信号处理
         signal.signal(signal.SIGINT, self._signal_handler)
@@ -154,6 +158,14 @@ class SmartSpeakerEngine:
             logger.info(f"ASR (Vosk) 初始化完成: {vosk_config.get('model_path')}")
         else:
             logger.warning("ASR (Vosk) 模型未找到, 将使用云端 ASR 降级")
+
+        # 读取 ASR 优化开关
+        self._asr_incremental_mode = asr_config.get("incremental", True)
+        self._asr_preprocess = asr_config.get("preprocess", True)
+        logger.info(
+            f"ASR 优化: 增量识别={'✓' if self._asr_incremental_mode else '✗'}, "
+            f"预处理={'✓' if self._asr_preprocess else '✗'}"
+        )
 
     def _init_llm(self) -> None:
         """初始化大语言模型"""
@@ -235,6 +247,7 @@ class SmartSpeakerEngine:
 
         # ASR 结果 → 技能处理 → LLM
         self.event_bus.subscribe(Event.ASR_RESULT, self._on_asr_result)
+        self.event_bus.subscribe(Event.ASR_PARTIAL, self._on_asr_partial)
 
         # LLM 流式输出
         self.event_bus.subscribe(Event.LLM_STREAM_CHUNK, self._on_llm_stream_chunk)
@@ -325,8 +338,16 @@ class SmartSpeakerEngine:
             self.wake_word_detector.detect(audio_frame)
 
         elif current_state == State.LISTENING:
-            # 累积音频缓冲
+            # 累积音频缓冲 (用于保存调试录音和后备 ASR)
             self._speech_audio_buffer.append(audio_frame)
+            # 增量 ASR: 边听边识别, 逐帧送入 Vosk
+            if self._asr_incremental_mode and self.asr and self.asr.is_available:
+                try:
+                    accepted = self.asr.feed_chunk(audio_frame)
+                    if accepted:
+                        self._asr_final_text += accepted
+                except Exception:
+                    pass  # 增量送入失败不影响主流程
             # VAD 处理
             if self.vad:
                 vad_state = self.vad.process(audio_frame)
@@ -352,6 +373,14 @@ class SmartSpeakerEngine:
         # 清空之前的语音缓冲
         self._speech_audio_buffer = []
 
+        # 增量 ASR 模式: 提前创建识别器, 边听边识别
+        self._asr_final_text = ""
+        if self._asr_incremental_mode and self.asr and self.asr.is_available:
+            try:
+                self.asr.begin_utterance()
+            except Exception as e:
+                logger.warning(f"增量 ASR 初始化失败: {e}")
+
         # 切换到 LISTENING
         if self.state_machine.transition(State.LISTENING):
             self.event_bus.publish(
@@ -361,7 +390,7 @@ class SmartSpeakerEngine:
             )
 
     def _on_speech_end(self, event_data) -> None:
-        """语音结束: 切换到 THINKING, 触发 ASR"""
+        """语音结束: 切换到 THINKING, 触发 ASR (含音频预处理)"""
         if not self.state_machine.is_in(State.LISTENING):
             return
 
@@ -379,25 +408,48 @@ class SmartSpeakerEngine:
         audio_data = np.concatenate(self._speech_audio_buffer)
         self._speech_audio_buffer = []
 
+        # 音频预处理: 去直流 + 高通滤波 + 峰值归一化 (提升 ASR 准确率)
+        if self._asr_preprocess:
+            audio_data = preprocess_pipeline(audio_data, sample_rate=16000)
+
         # 保存录制音频到文件 (调试用)
         self._save_debug_audio(audio_data)
 
-        # 异步执行 ASR (在单独线程中)
-        threading.Thread(
-            target=self._do_asr,
-            args=(audio_data,),
-            daemon=True,
-            name="asr-thread",
-        ).start()
+        # 选择 ASR 模式: 增量模式 (边听边识别) 或 批量模式
+        if self._asr_incremental_mode and self.asr and self.asr.is_available:
+            # 增量模式: 音频已逐帧送入, 直接获取最终结果
+            threading.Thread(
+                target=self._do_asr_finalize,
+                args=(audio_data,),
+                daemon=True,
+                name="asr-thread",
+            ).start()
+        else:
+            # 批量模式: 一次性送入全部音频
+            threading.Thread(
+                target=self._do_asr,
+                args=(audio_data,),
+                daemon=True,
+                name="asr-thread",
+            ).start()
 
     def _do_asr(self, audio_data: np.ndarray) -> None:
-        """执行语音识别 (在独立线程中)"""
+        """执行语音识别 (在独立线程中, 支持流式部分结果)"""
         try:
-            result = self.asr.transcribe(audio_data, 16000)
+            # 流式部分结果回调: 发布 ASR_PARTIAL 事件
+            def on_partial(partial_text: str):
+                self.event_bus.publish(
+                    Event.ASR_PARTIAL,
+                    source="asr",
+                    partial_text=partial_text,
+                )
+
+            result = self.asr.transcribe(audio_data, 16000, partial_callback=on_partial)
             if result and result.text.strip():
                 logger.info(
                     f"ASR 结果: \"{result.text}\" "
-                    f"(置信度={result.confidence:.2f})"
+                    f"(置信度={result.confidence:.2f}, "
+                    f"延迟={result.latency_ms:.0f}ms)"
                 )
                 self.event_bus.publish(
                     Event.ASR_RESULT,
@@ -448,6 +500,46 @@ class SmartSpeakerEngine:
             # 无法处理
             logger.warning(f"未找到合适的技能处理: \"{text}\"")
             self._do_tts("抱歉, 我不太明白你的意思")
+
+    def _do_asr_finalize(self, audio_data: np.ndarray) -> None:
+        """
+        增量模式 ASR 最终化 (在独立线程中).
+        音频已在 LISTENING 期间逐帧送入, 这里只需获取最终结果.
+        """
+        start_time = time.time()
+        try:
+            final_text = self.asr.end_utterance()
+            # 合并增量模式中 AcceptWaveform 累积的文本
+            combined = (self._asr_final_text + final_text).strip()
+            latency_ms = (time.time() - start_time) * 1000
+
+            if combined:
+                logger.info(
+                    f"ASR 结果 (增量): \"{combined}\" "
+                    f"(finalize={latency_ms:.0f}ms)"
+                )
+                self.event_bus.publish(
+                    Event.ASR_RESULT,
+                    source="asr",
+                    text=combined,
+                    confidence=0.85,
+                    latency_ms=latency_ms,
+                )
+            else:
+                logger.info("ASR 结果为空 (增量模式)")
+                self.event_bus.publish(Event.ASR_RESULT, source="asr", text="")
+        except Exception as e:
+            logger.error(f"增量 ASR 最终化失败: {e}")
+            # 降级: 使用批量模式重试
+            logger.info("降级到批量 ASR 模式...")
+            self._do_asr(audio_data)
+
+    def _on_asr_partial(self, event_data) -> None:
+        """ASR 流式部分结果: 实时显示中间识别文字"""
+        partial_text = event_data.get("partial_text", "")
+        if partial_text:
+            # 实时打印中间结果, 让用户看到识别正在进行
+            logger.info(f"🎤 识别中... \"{partial_text}\"")
 
     def _on_llm_stream_chunk(self, event_data) -> None:
         """LLM 流式输出块: 累积文本 (用于调试/显示)"""

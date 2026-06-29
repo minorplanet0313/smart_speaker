@@ -62,6 +62,9 @@ class VoiceActivityDetector:
         self._speech_start_time: Optional[float] = None
         self._silence_start_time: Optional[float] = None
         self._speech_buffer: list = []
+        self._silero_buffer = np.array([], dtype=np.float32)
+        self._noise_floor = 0.0  # 自适应噪声底噪
+        self._noise_samples = 0
         self._reset_state()
 
     def _lazy_load_model(self) -> None:
@@ -85,6 +88,8 @@ class VoiceActivityDetector:
         self._speech_start_time = None
         self._silence_start_time = None
         self._speech_detected = False
+        # 清除 Silero 内部缓冲，避免跨语音段残留
+        self._silero_buffer = np.array([], dtype=np.float32)
 
     def process(self, audio_frame: np.ndarray) -> VADState:
         """
@@ -168,8 +173,6 @@ class VoiceActivityDetector:
         try:
             # silero-vad 5.x 要求精确 512 帧 @16kHz (或 256 @8kHz)
             # 累积帧到内部 buffer，达到 512 帧后推理
-            if not hasattr(self, '_silero_buffer'):
-                self._silero_buffer = np.array([], dtype=np.float32)
             self._silero_buffer = np.append(self._silero_buffer, audio_frame)
 
             # 需要 512 帧（16kHz） 或 256 帧（8kHz）
@@ -198,10 +201,24 @@ class VoiceActivityDetector:
         """
         能量检测降级方案
         计算 RMS 能量, 与自适应阈值比较
+
+        在前 2 秒自动估算环境噪声底噪, 阈值 = 噪声底噪 × 3
+        稳定运行后使用固定乘数, 防止阈值漂移
         """
         rms = np.sqrt(np.mean(np.square(audio_frame)))
-        # 动态阈值: 基于背景噪声水平 (简化版)
-        energy_threshold = 0.01
+
+        # 自适应噪声底噪估算（前 100 帧 ≈ 6.4 秒内, 取较低 RMS 作为噪声估计）
+        if self._noise_samples < 100:
+            self._noise_samples += 1
+            if self._noise_floor == 0.0 or rms < self._noise_floor * 2:
+                # 指数移动平均, 平滑噪声估计
+                alpha = 0.05
+                self._noise_floor = (1 - alpha) * self._noise_floor + alpha * rms
+            energy_threshold = max(self._noise_floor * 3, 0.005)
+        else:
+            # 稳定运行: 使用已收敛的噪声底噪
+            energy_threshold = max(self._noise_floor * 3, 0.005)
+
         return rms > energy_threshold
 
     def reset(self) -> None:

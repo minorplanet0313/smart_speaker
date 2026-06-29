@@ -32,7 +32,9 @@ edge-tts==6.1.12
 PyYAML==6.0.2
 python-dotenv==1.0.1
 soundfile==0.12.1
-scipy==1.13.1          # 音频处理
+# --- Audio Processing ---
+scipy==1.13.1          # 高通滤波 (ASR 预处理)
+# noisereduce==3.0.3   # 可选: 频谱噪声抑制 (提升 ASR 准确率)
 
 # --- HTTP / API ---
 requests==2.32.3
