@@ -16,6 +16,8 @@ silero-vad==5.1
 
 # --- ASR (Speech-to-Text) ---
 vosk==0.3.45
+# sherpa-onnx>=1.10       # 可选: 新一代本地 ASR (14MB 模型, 替代 Vosk)
+# tencentcloud-sdk-python-asr  # 可选: 腾讯云 ASR (5千次/月免费)
 
 # --- LLM (DeepSeek) ---
 openai==1.35.0          # DeepSeek 兼容 OpenAI SDK

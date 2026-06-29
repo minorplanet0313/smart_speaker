@@ -149,31 +149,56 @@ class SmartSpeakerEngine:
                         f"threshold={ww_config.get('threshold', 0.5)}")
 
     def _init_asr(self) -> None:
-        """初始化语音识别 (本地 + 云端备份)"""
+        """初始化语音识别 (本地主引擎 + 云端备份)"""
         asr_config = self.config.get("asr", {})
 
-        # --- 本地 Vosk ASR ---
-        vosk_config = asr_config.get("vosk", {})
-        self.asr = VoskASR(
-            model_path=vosk_config.get("model_path", "models/vosk-model-cn-0.22"),
-            sample_rate=vosk_config.get("sample_rate", 16000),
-        )
-        if self.asr.is_available:
-            logger.info(f"ASR (Vosk) 初始化完成: {vosk_config.get('model_path')}")
+        # --- 本地 ASR: 按 primary 选择引擎 ---
+        primary = asr_config.get("primary", "vosk")
+        if primary == "sherpa":
+            sherpa_config = asr_config.get("sherpa", {})
+            from src.asr.sherpa_asr import SherpaASR
+            self.asr = SherpaASR(
+                model_dir=sherpa_config.get("model_path",
+                    "./models/sherpa-onnx-streaming-zipformer-zh-14M"),
+                sample_rate=sherpa_config.get("sample_rate", 16000),
+                num_threads=sherpa_config.get("num_threads", 2),
+                decoding_method=sherpa_config.get("decoding_method", "greedy_search"),
+            )
+            if self.asr.is_available:
+                logger.info(f"ASR (sherpa-onnx) 初始化完成: "
+                            f"{sherpa_config.get('model_path')}")
         else:
-            logger.warning("ASR (Vosk) 模型未找到, 将使用云端 ASR 降级")
+            # 默认 Vosk
+            vosk_config = asr_config.get("vosk", {})
+            self.asr = VoskASR(
+                model_path=vosk_config.get("model_path",
+                    "models/vosk-model-cn-0.22"),
+                sample_rate=vosk_config.get("sample_rate", 16000),
+            )
+            if self.asr.is_available:
+                logger.info(f"ASR (Vosk) 初始化完成: {vosk_config.get('model_path')}")
+            else:
+                logger.warning("ASR (Vosk) 模型未找到, 将使用云端 ASR 降级")
 
-        # --- 云端 ASR 备份 (百度/阿里云) ---
+        # --- 云端 ASR 备份 (百度/腾讯/阿里云) ---
         cloud_config = asr_config.get("cloud", {})
-        provider = cloud_config.get("provider", "baidu")
-        if provider == "baidu":
+        cloud_provider = cloud_config.get("provider", "baidu")
+        if cloud_provider == "baidu":
             baidu_cfg = cloud_config.get("baidu", {})
             self.asr_cloud = CloudASR(
                 provider="baidu",
                 api_key=baidu_cfg.get("api_key", ""),
                 secret_key=baidu_cfg.get("secret_key", ""),
             )
-        elif provider == "aliyun":
+        elif cloud_provider == "tencent":
+            tencent_cfg = cloud_config.get("tencent", {})
+            self.asr_cloud = CloudASR(
+                provider="tencent",
+                api_key=tencent_cfg.get("secret_id", ""),
+                secret_key=tencent_cfg.get("secret_key", ""),
+                region=tencent_cfg.get("region", "ap-guangzhou"),
+            )
+        elif cloud_provider == "aliyun":
             ali_cfg = cloud_config.get("aliyun", {})
             self.asr_cloud = CloudASR(
                 provider="aliyun",
@@ -182,7 +207,7 @@ class SmartSpeakerEngine:
             )
 
         if self.asr_cloud and self.asr_cloud.is_available:
-            logger.info(f"云端 ASR ({provider}) 就绪, 作为本地 ASR 降级备份")
+            logger.info(f"云端 ASR ({cloud_provider}) 就绪, 作为本地 ASR 降级备份")
         else:
             logger.info("云端 ASR 未配置, 仅使用本地 ASR")
 

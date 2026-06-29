@@ -1,9 +1,10 @@
 """
-云端 ASR 实现 (百度/阿里云)
+云端 ASR 实现 (百度/腾讯/阿里云)
 
 当本地 Vosk ASR 不可用或识别质量不达标时使用
-- 百度短语音识别: 免费 5万次/终身
-- 阿里云一句话识别: 3个月试用
+- 百度短语音识别: 免费 5万次/终身 (REST)
+- 腾讯云一句话识别: 免费 5千次/月 (SDK)
+- 阿里云一句话识别: 3个月试用 (WebSocket, 待完善)
 
 Usage:
     asr = CloudASR(provider="baidu", api_key="...", secret_key="...")
@@ -32,6 +33,7 @@ class CloudASR(BaseASR):
 
     支持:
     - 百度 AI 短语音识别 (REST)
+    - 腾讯云一句话识别 (SDK)
     - 阿里云 NLS 一句话识别 (WebSocket, 待完善)
     """
 
@@ -42,26 +44,37 @@ class CloudASR(BaseASR):
     # 阿里云 ASR
     ALIYUN_ASR_URL = "https://nls-gateway.cn-shanghai.aliyuncs.com/stream/v1/asr"
 
+    # 腾讯云 ASR
+    TENCENT_DEFAULT_REGION = "ap-guangzhou"
+
     def __init__(
         self,
         provider: str = "baidu",
         api_key: str = "",
         secret_key: str = "",
+        region: str = "ap-guangzhou",
     ):
         """
         Args:
-            provider: "baidu" 或 "aliyun"
-            api_key: 百度 API Key / 阿里云 AccessKey
-            secret_key: 百度 Secret Key / 阿里云 AccessKey Secret
+            provider: "baidu" / "tencent" / "aliyun"
+            api_key: 百度 API Key / 腾讯 SecretId / 阿里云 AccessKey
+            secret_key: 百度 Secret Key / 腾讯 SecretKey / 阿里云 AccessKey Secret
+            region: 腾讯云地域 (默认 ap-guangzhou)
         """
         self.provider = provider
         self.api_key = api_key
         self.secret_key = secret_key
+        self.region = region
         self._token: Optional[str] = None
         self._token_expiry: float = 0.0
+        self._tencent_client = None  # 腾讯云 SDK 客户端
 
         if provider == "baidu":
             self._available = bool(api_key and secret_key)
+        elif provider == "tencent":
+            self._available = bool(api_key and secret_key)
+            if self._available:
+                self._init_tencent_client()
         elif provider == "aliyun":
             self._available = bool(api_key and secret_key)
         else:
@@ -71,6 +84,25 @@ class CloudASR(BaseASR):
             logger.info(f"云端 ASR ({provider}) 初始化完成")
         else:
             logger.info(f"云端 ASR ({provider}) 未配置 API Key, 跳过")
+
+    def _init_tencent_client(self) -> None:
+        """初始化腾讯云 ASR SDK 客户端"""
+        try:
+            from tencentcloud.common import credential
+            from tencentcloud.asr.v20190614 import asr_client
+
+            cred = credential.Credential(self.api_key, self.secret_key)
+            self._tencent_client = asr_client.AsrClient(cred, self.region)
+            logger.info(f"腾讯云 ASR 客户端初始化完成 (region={self.region})")
+        except ImportError:
+            logger.warning(
+                "tencentcloud-sdk-python-asr 未安装, 腾讯云 ASR 不可用.\n"
+                "安装: pip install tencentcloud-sdk-python-asr"
+            )
+            self._available = False
+        except Exception as e:
+            logger.error(f"腾讯云 ASR 客户端初始化失败: {e}")
+            self._available = False
 
     def transcribe(
         self,
@@ -84,6 +116,8 @@ class CloudASR(BaseASR):
 
         if self.provider == "baidu":
             result = self._transcribe_baidu(audio_data, sample_rate)
+        elif self.provider == "tencent":
+            result = self._transcribe_tencent(audio_data, sample_rate)
         elif self.provider == "aliyun":
             result = self._transcribe_aliyun(audio_data, sample_rate)
         else:
@@ -184,6 +218,89 @@ class CloudASR(BaseASR):
 
         # 不应到达这里
         raise RuntimeError(f"百度 ASR 失败: {last_error}")
+
+    def _transcribe_tencent(
+        self,
+        audio_data: np.ndarray,
+        sample_rate: int,
+        max_retries: int = 2,
+    ) -> dict:
+        """腾讯云一句话识别 (含重试)"""
+        if self._tencent_client is None:
+            raise RuntimeError("腾讯云 ASR 客户端未初始化")
+
+        from tencentcloud.asr.v20190614 import models
+        from tencentcloud.common.exception.tencent_cloud_sdk_exception import (
+            TencentCloudSDKException,
+        )
+
+        # 转换为 int16 PCM bytes
+        if audio_data.dtype == np.float32:
+            audio_int16 = (np.clip(audio_data, -1.0, 1.0) * 32767).astype(np.int16)
+        else:
+            audio_int16 = audio_data.astype(np.int16)
+        raw_bytes = audio_int16.tobytes()
+
+        # base64 编码 (腾讯支持 raw PCM, 不需要 WAV 头)
+        audio_b64 = base64.b64encode(raw_bytes).decode("utf-8")
+
+        # 检查音频长度
+        duration_sec = len(audio_int16) / sample_rate
+        if duration_sec > 60:
+            raise RuntimeError(f"音频过长 ({duration_sec:.0f}s), 腾讯云最多 60s")
+        if len(raw_bytes) > 3 * 1024 * 1024:
+            raise RuntimeError(f"音频过大 ({len(raw_bytes)} bytes), 腾讯云最多 3MB")
+
+        last_error = None
+        for attempt in range(max_retries + 1):
+            try:
+                req = models.SentenceRecognitionRequest()
+                req.EngSerViceType = "16k_zh"
+                req.SourceType = 1          # 直接上传数据
+                req.VoiceFormat = "pcm"      # raw PCM, 无需 WAV 头
+                req.Data = audio_b64
+                req.DataLen = len(raw_bytes)
+                req.FilterDirty = 1          # 过滤脏词
+                req.FilterPunc = 1           # 过滤标点
+                req.ConvertNumMode = 1        # 数字转阿拉伯
+                req.UsrAudioKey = "smart_speaker"
+
+                resp = self._tencent_client.SentenceRecognition(req)
+                text = resp.Result or ""
+                return {"text": text, "confidence": 0.9}
+
+            except TencentCloudSDKException as e:
+                # Auth 错误不重试
+                if e.code in ("AuthFailure", "InvalidParameter", "InvalidParameterValue"):
+                    raise RuntimeError(
+                        f"腾讯云 ASR 错误: code={e.code}, "
+                        f"msg={e.message}"
+                    ) from e
+                # 其他错误重试
+                last_error = e
+                if attempt < max_retries:
+                    backoff = (attempt + 1) * 0.5
+                    logger.warning(f"腾讯云 ASR 错误 ({e.code}): {e.message}, "
+                                   f"重试 ({attempt + 1}/{max_retries}, "
+                                   f"等待 {backoff}s)...")
+                    time.sleep(backoff)
+                else:
+                    raise RuntimeError(
+                        f"腾讯云 ASR 失败: code={e.code}, "
+                        f"msg={e.message}"
+                    ) from e
+
+            except (IOError, OSError, TimeoutError) as e:
+                last_error = e
+                if attempt < max_retries:
+                    backoff = (attempt + 1) * 0.5
+                    logger.warning(f"腾讯云 ASR 网络错误: {e}, "
+                                   f"重试 ({attempt + 1}/{max_retries})...")
+                    time.sleep(backoff)
+                else:
+                    raise RuntimeError(f"腾讯云 ASR 网络请求失败: {e}") from e
+
+        raise RuntimeError(f"腾讯云 ASR 失败: {last_error}")
 
     def _transcribe_aliyun(
         self,

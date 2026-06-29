@@ -39,7 +39,7 @@ wake_word:
 
 # --- 语音识别 (ASR) ---
 asr:
-  primary: "vosk"            # vosk | cloud
+  primary: "vosk"            # vosk | sherpa | cloud
   fallback: "cloud"          # 降级方案
   incremental: true          # 增量识别: 边听边识别, 降低感知延迟
   preprocess: true           # 音频预处理: 提升识别准确率
@@ -49,12 +49,22 @@ asr:
     model_path: "./models/vosk-model-cn-0.22"
     sample_rate: 16000
     words_list: null         # 可选: 自定义词典提升特殊词汇识别
+  sherpa:
+    # sherpa-onnx 本地流式 ASR (Pi 3B+ 推荐 14M 模型)
+    # 下载: wget https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-streaming-zipformer-zh-14M-2025-06-30.tar.bz2
+    model_path: "./models/sherpa-onnx-streaming-zipformer-zh-14M"
+    num_threads: 2
+    decoding_method: "greedy_search"  # greedy_search | modified_beam_search
   cloud:
-    provider: "baidu"        # baidu | aliyun
+    provider: "baidu"        # baidu | tencent | aliyun
     baidu:
       app_id: "${BAIDU_APP_ID}"
       api_key: "${BAIDU_API_KEY}"
       secret_key: "${BAIDU_SECRET_KEY}"
+    tencent:
+      secret_id: "${TENCENT_SECRET_ID}"
+      secret_key: "${TENCENT_SECRET_KEY}"
+      region: "ap-guangzhou"
     aliyun:
       access_key_id: "${ALIYUN_ACCESS_KEY_ID}"
       access_key_secret: "${ALIYUN_ACCESS_KEY_SECRET}"
