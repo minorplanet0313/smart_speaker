@@ -24,6 +24,7 @@ from src.audio.vad import VADState, VoiceActivityDetector
 from src.wake_word.detector import WakeWordDetector
 from src.asr.base import ASRResult
 from src.asr.vosk_asr import VoskASR
+from src.asr.cloud_asr import CloudASR
 from src.audio.preprocessing import PreprocessConfig, preprocess_pipeline
 from src.llm.deepseek import DeepSeekLLM
 from src.llm.context import ConversationContext
@@ -65,6 +66,7 @@ class SmartSpeakerEngine:
         self.vad: Optional[VoiceActivityDetector] = None
         self.wake_word_detector: Optional[WakeWordDetector] = None
         self.asr: Optional[VoskASR] = None
+        self.asr_cloud: Optional[CloudASR] = None
         self.llm: Optional[DeepSeekLLM] = None
         self.tts_edge: Optional[EdgeTTS] = None
         self.tts_piper: Optional[PiperTTS] = None
@@ -147,8 +149,10 @@ class SmartSpeakerEngine:
                         f"threshold={ww_config.get('threshold', 0.5)}")
 
     def _init_asr(self) -> None:
-        """初始化语音识别"""
+        """初始化语音识别 (本地 + 云端备份)"""
         asr_config = self.config.get("asr", {})
+
+        # --- 本地 Vosk ASR ---
         vosk_config = asr_config.get("vosk", {})
         self.asr = VoskASR(
             model_path=vosk_config.get("model_path", "models/vosk-model-cn-0.22"),
@@ -158,6 +162,29 @@ class SmartSpeakerEngine:
             logger.info(f"ASR (Vosk) 初始化完成: {vosk_config.get('model_path')}")
         else:
             logger.warning("ASR (Vosk) 模型未找到, 将使用云端 ASR 降级")
+
+        # --- 云端 ASR 备份 (百度/阿里云) ---
+        cloud_config = asr_config.get("cloud", {})
+        provider = cloud_config.get("provider", "baidu")
+        if provider == "baidu":
+            baidu_cfg = cloud_config.get("baidu", {})
+            self.asr_cloud = CloudASR(
+                provider="baidu",
+                api_key=baidu_cfg.get("api_key", ""),
+                secret_key=baidu_cfg.get("secret_key", ""),
+            )
+        elif provider == "aliyun":
+            ali_cfg = cloud_config.get("aliyun", {})
+            self.asr_cloud = CloudASR(
+                provider="aliyun",
+                api_key=ali_cfg.get("access_key_id", ""),
+                secret_key=ali_cfg.get("access_key_secret", ""),
+            )
+
+        if self.asr_cloud and self.asr_cloud.is_available:
+            logger.info(f"云端 ASR ({provider}) 就绪, 作为本地 ASR 降级备份")
+        else:
+            logger.info("云端 ASR 未配置, 仅使用本地 ASR")
 
         # 读取 ASR 优化开关
         self._asr_incremental_mode = asr_config.get("incremental", True)
@@ -434,7 +461,7 @@ class SmartSpeakerEngine:
             ).start()
 
     def _do_asr(self, audio_data: np.ndarray) -> None:
-        """执行语音识别 (在独立线程中, 支持流式部分结果)"""
+        """执行语音识别 (在独立线程中, 支持流式部分结果, 失败时降级到云端)"""
         try:
             # 流式部分结果回调: 发布 ASR_PARTIAL 事件
             def on_partial(partial_text: str):
@@ -462,9 +489,40 @@ class SmartSpeakerEngine:
                 logger.info("ASR 结果为空")
                 self.event_bus.publish(Event.ASR_RESULT, source="asr", text="")
         except Exception as e:
-            logger.error(f"ASR 失败: {e}")
+            logger.warning(f"本地 ASR 失败: {e}, 尝试云端 ASR...")
+            self._do_cloud_asr(audio_data)
+
+    def _do_cloud_asr(self, audio_data: np.ndarray) -> None:
+        """云端 ASR 降级 (本地 Vosk 失败时自动切换)"""
+        if not self.asr_cloud or not self.asr_cloud.is_available:
+            logger.error("云端 ASR 不可用, ASR 失败")
             self.event_bus.publish(
-                Event.ASR_ERROR, source="asr", error=str(e)
+                Event.ASR_ERROR, source="asr",
+                error="本地和云端 ASR 均不可用"
+            )
+            return
+
+        try:
+            result = self.asr_cloud.transcribe(audio_data, 16000)
+            if result and result.text.strip():
+                logger.info(
+                    f"云端 ASR 结果: \"{result.text}\" "
+                    f"(延迟={result.latency_ms:.0f}ms)"
+                )
+                self.event_bus.publish(
+                    Event.ASR_RESULT,
+                    source="asr_cloud",
+                    text=result.text,
+                    confidence=result.confidence,
+                    latency_ms=result.latency_ms,
+                )
+            else:
+                logger.info("云端 ASR 结果为空")
+                self.event_bus.publish(Event.ASR_RESULT, source="asr_cloud", text="")
+        except Exception as e2:
+            logger.error(f"云端 ASR 也失败: {e2}")
+            self.event_bus.publish(
+                Event.ASR_ERROR, source="asr_cloud", error=str(e2)
             )
 
     def _on_asr_result(self, event_data) -> None:
@@ -505,6 +563,7 @@ class SmartSpeakerEngine:
         """
         增量模式 ASR 最终化 (在独立线程中).
         音频已在 LISTENING 期间逐帧送入, 这里只需获取最终结果.
+        失败时依次降级: 批量 Vosk → 云端 ASR.
         """
         start_time = time.time()
         try:
@@ -529,9 +588,9 @@ class SmartSpeakerEngine:
                 logger.info("ASR 结果为空 (增量模式)")
                 self.event_bus.publish(Event.ASR_RESULT, source="asr", text="")
         except Exception as e:
-            logger.error(f"增量 ASR 最终化失败: {e}")
-            # 降级: 使用批量模式重试
-            logger.info("降级到批量 ASR 模式...")
+            logger.warning(f"增量 ASR 最终化失败: {e}")
+            # 降级到批量 Vosk → 批量内部失败会再降级到云端
+            logger.info("Vosk 增量失败, 降级到批量模式...")
             self._do_asr(audio_data)
 
     def _on_asr_partial(self, event_data) -> None:

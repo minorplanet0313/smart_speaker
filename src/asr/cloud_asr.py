@@ -2,8 +2,8 @@
 云端 ASR 实现 (百度/阿里云)
 
 当本地 Vosk ASR 不可用或识别质量不达标时使用
-- 百度短语音识别: 免费 5万次/天
-- 阿里云一句话识别: ¥0.0008/次
+- 百度短语音识别: 免费 5万次/终身
+- 阿里云一句话识别: 3个月试用
 
 Usage:
     asr = CloudASR(provider="baidu", api_key="...", secret_key="...")
@@ -11,8 +11,10 @@ Usage:
 """
 
 import base64
+import io
 import json
 import time
+import wave
 from typing import Optional
 from urllib.request import Request, urlopen
 
@@ -29,15 +31,15 @@ class CloudASR(BaseASR):
     云端 ASR
 
     支持:
-    - 百度 AI 短语音识别
-    - 阿里云 NLS 一句话识别
+    - 百度 AI 短语音识别 (REST)
+    - 阿里云 NLS 一句话识别 (WebSocket, 待完善)
     """
 
     # 百度 ASR API 地址
     BAIDU_TOKEN_URL = "https://aip.baidubce.com/oauth/2.0/token"
     BAIDU_ASR_URL = "https://vop.baidu.com/server_api"
 
-    # 阿里云 ASR (通过 WebSocket, 这里使用 HTTP 简化版)
+    # 阿里云 ASR
     ALIYUN_ASR_URL = "https://nls-gateway.cn-shanghai.aliyuncs.com/stream/v1/asr"
 
     def __init__(
@@ -45,19 +47,16 @@ class CloudASR(BaseASR):
         provider: str = "baidu",
         api_key: str = "",
         secret_key: str = "",
-        app_id: str = "",
     ):
         """
         Args:
             provider: "baidu" 或 "aliyun"
-            api_key: API Key / AccessKey
-            secret_key: Secret Key
-            app_id: App ID (百度需要)
+            api_key: 百度 API Key / 阿里云 AccessKey
+            secret_key: 百度 Secret Key / 阿里云 AccessKey Secret
         """
         self.provider = provider
         self.api_key = api_key
         self.secret_key = secret_key
-        self.app_id = app_id
         self._token: Optional[str] = None
         self._token_expiry: float = 0.0
 
@@ -71,7 +70,7 @@ class CloudASR(BaseASR):
         if self._available:
             logger.info(f"云端 ASR ({provider}) 初始化完成")
         else:
-            logger.warning(f"云端 ASR ({provider}) 未配置, 不可用")
+            logger.info(f"云端 ASR ({provider}) 未配置 API Key, 跳过")
 
     def transcribe(
         self,
@@ -92,9 +91,14 @@ class CloudASR(BaseASR):
 
         latency_ms = (time.time() - start_time) * 1000
 
+        logger.info(
+            f"云端 ASR ({self.provider}) 完成: \"{result.get('text', '')}\" "
+            f"({latency_ms:.0f}ms)"
+        )
+
         return ASRResult(
             text=result.get("text", ""),
-            confidence=result.get("confidence", 0.0),
+            confidence=result.get("confidence", 0.9),
             latency_ms=latency_ms,
         )
 
@@ -102,20 +106,16 @@ class CloudASR(BaseASR):
         self,
         audio_data: np.ndarray,
         sample_rate: int,
+        max_retries: int = 2,
     ) -> dict:
-        """百度 ASR 识别"""
-        # 获取 access token
-        token = self._get_baidu_token()
-
-        # 转换为 PCM WAV 格式 (base64)
+        """百度 ASR 识别 (含重试)"""
+        # 转换为 int16 PCM
         if audio_data.dtype == np.float32:
             audio_int16 = (np.clip(audio_data, -1.0, 1.0) * 32767).astype(np.int16)
         else:
             audio_int16 = audio_data.astype(np.int16)
 
-        import io
-        import wave
-
+        # 编码为 PCM WAV base64
         wav_buf = io.BytesIO()
         with wave.open(wav_buf, 'wb') as wf:
             wf.setnchannels(1)
@@ -125,32 +125,65 @@ class CloudASR(BaseASR):
 
         audio_b64 = base64.b64encode(wav_buf.getvalue()).decode()
 
-        # 构造请求
-        payload = json.dumps({
-            "format": "pcm",
-            "rate": sample_rate,
-            "channel": 1,
-            "cuid": "smart_speaker",
-            "token": token,
-            "speech": audio_b64,
-            "len": len(audio_int16) * 2,
-        }).encode('utf-8')
+        last_error = None
+        for attempt in range(max_retries + 1):
+            try:
+                # 获取 access token (可能因过期而刷新)
+                token = self._get_baidu_token()
 
-        req = Request(
-            self.BAIDU_ASR_URL,
-            data=payload,
-            headers={"Content-Type": "application/json"},
-        )
+                # 构造请求
+                payload = json.dumps({
+                    "format": "pcm",
+                    "rate": sample_rate,
+                    "channel": 1,
+                    "cuid": "smart_speaker",
+                    "token": token,
+                    "speech": audio_b64,
+                    "len": len(audio_int16) * 2,
+                }).encode('utf-8')
 
-        with urlopen(req, timeout=10) as resp:
-            data = json.loads(resp.read().decode())
+                req = Request(
+                    self.BAIDU_ASR_URL,
+                    data=payload,
+                    headers={"Content-Type": "application/json"},
+                )
 
-        if data.get("err_no") == 0:
-            return {"text": " ".join(data.get("result", [])), "confidence": 0.9}
-        else:
-            logger.error(f"百度 ASR 错误: err_no={data.get('err_no')}, "
-                         f"msg={data.get('err_msg')}")
-            raise RuntimeError(f"百度 ASR 失败: {data.get('err_msg')}")
+                with urlopen(req, timeout=10) as resp:
+                    data = json.loads(resp.read().decode())
+
+                err_no = data.get("err_no", -1)
+                if err_no == 0:
+                    text = " ".join(data.get("result", []))
+                    return {"text": text, "confidence": 0.9}
+                else:
+                    # Token 过期/无效时刷新重试
+                    if err_no in (3301, 3302, 3303, 3310, 3311) and attempt < max_retries:
+                        logger.warning(f"百度 ASR Token 问题 (err_no={err_no}), "
+                                       f"刷新重试 ({attempt + 1}/{max_retries})...")
+                        self._token = None  # 强制刷新 token
+                        self._token_expiry = 0.0
+                        continue
+                    raise RuntimeError(
+                        f"百度 ASR 错误: err_no={err_no}, "
+                        f"msg={data.get('err_msg', 'unknown')}"
+                    )
+
+            except (IOError, OSError, TimeoutError) as e:
+                last_error = e
+                if attempt < max_retries:
+                    backoff = (attempt + 1) * 0.5
+                    logger.warning(f"百度 ASR 网络错误: {e}, "
+                                   f"重试 ({attempt + 1}/{max_retries}, "
+                                   f"等待 {backoff}s)...")
+                    time.sleep(backoff)
+                else:
+                    raise RuntimeError(f"百度 ASR 网络请求失败: {e}") from e
+
+            except RuntimeError:
+                raise
+
+        # 不应到达这里
+        raise RuntimeError(f"百度 ASR 失败: {last_error}")
 
     def _transcribe_aliyun(
         self,
