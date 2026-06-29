@@ -42,6 +42,11 @@ class WebEventCollector:
             "total_interactions": 0,
         }
 
+        # 系统信息缓存 (避免频繁 psutil 阻塞)
+        self._system_cache: dict = {}
+        self._system_cache_ts: float = 0.0
+        self._system_cache_ttl: float = 2.0  # 缓存 2 秒
+
         self._subscribe()
 
     # ---- 订阅 ----
@@ -139,11 +144,14 @@ class WebEventCollector:
         return messages
 
     def get_system_info(self) -> dict:
-        """获取系统信息"""
+        """获取系统信息（缓存 TTL 内直接返回，避免 psutil 阻塞 SSE 循环）"""
+        now = time.time()
+        if self._system_cache and (now - self._system_cache_ts) < self._system_cache_ttl:
+            return self._system_cache
         info = {}
         try:
             import psutil
-            info["cpu_percent"] = psutil.cpu_percent(interval=0.1)
+            info["cpu_percent"] = psutil.cpu_percent(interval=0)
             info["memory_percent"] = psutil.virtual_memory().percent
             info["memory_used_mb"] = round(psutil.virtual_memory().used / 1024 / 1024, 1)
             info["memory_total_mb"] = round(psutil.virtual_memory().total / 1024 / 1024, 1)
@@ -151,6 +159,8 @@ class WebEventCollector:
             info["disk_free_gb"] = round(psutil.disk_usage("/").free / 1024 / 1024 / 1024, 1)
         except ImportError:
             info["psutil"] = False
+        self._system_cache = info
+        self._system_cache_ts = now
         return info
 
     def get_audio_devices(self) -> dict:

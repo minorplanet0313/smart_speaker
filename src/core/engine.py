@@ -460,28 +460,30 @@ class SmartSpeakerEngine:
         """处理音频帧: 路由到唤醒词检测器 (IDLE) 或 VAD (LISTENING)"""
         current_state = self.state_machine.current_state
 
+        # 音频电平采集 — 所有状态都记录，确保 Web UI 音频表实时刷新
+        if not hasattr(self, '_audio_level_debug_time'):
+            self._audio_level_debug_time = 0.0
+            self._audio_level_samples = 0
+            self._audio_level_rms_sum = 0.0
+        self._audio_level_samples += 1
+        self._audio_level_rms_sum += float(
+            np.sqrt(np.mean(np.square(audio_frame)))
+        )
+        now = time.time()
+        if now - self._audio_level_debug_time >= 5.0:
+            avg_rms = self._audio_level_rms_sum / max(self._audio_level_samples, 1)
+            logger.debug(
+                f"🎤 音频电平: RMS={avg_rms:.4f} "
+                f"({'正常' if avg_rms > 0.001 else '⚠️ 太弱/无声!'}) "
+                f"[{self._audio_level_samples} 帧/5s]"
+            )
+            self._audio_level_debug_time = now
+            self._audio_level_samples = 0
+            self._audio_level_rms_sum = 0.0
+
         if current_state == State.IDLE and self.wake_word_detector:
-            now = time.time()
             if now < self._wake_word_cooldown_until:
                 return
-            if not hasattr(self, '_audio_level_debug_time'):
-                self._audio_level_debug_time = 0.0
-                self._audio_level_samples = 0
-                self._audio_level_rms_sum = 0.0
-            self._audio_level_samples += 1
-            self._audio_level_rms_sum += float(
-                np.sqrt(np.mean(np.square(audio_frame)))
-            )
-            if now - self._audio_level_debug_time >= 5.0:
-                avg_rms = self._audio_level_rms_sum / max(self._audio_level_samples, 1)
-                logger.debug(
-                    f"🎤 音频电平: RMS={avg_rms:.4f} "
-                    f"({'正常' if avg_rms > 0.001 else '⚠️ 太弱/无声!'}) "
-                    f"[{self._audio_level_samples} 帧/5s]"
-                )
-                self._audio_level_debug_time = now
-                self._audio_level_samples = 0
-                self._audio_level_rms_sum = 0.0
             self.wake_word_detector.detect(audio_frame)
 
         elif current_state == State.LISTENING:

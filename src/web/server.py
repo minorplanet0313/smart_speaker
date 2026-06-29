@@ -79,8 +79,16 @@ class WebServer:
 
         @app.get("/api/status")
         def api_status():
+            """实时状态 + 系统信息 + 最近消息 + 事件（前端轮询此接口）"""
             response.content_type = "application/json"
-            return json.dumps(collector.get_state(), ensure_ascii=False)
+            state = collector.get_state()
+            state["system"] = collector.get_system_info()
+            state["messages"] = collector.get_messages(30)
+            # 把 events 和 seq 也塞进去，供前端增量更新
+            all_events = collector.get_history(100)
+            state["_events"] = list(all_events)[-30:]   # 最近 30 条事件
+            state["_seq"] = len(all_events)               # 当前 event 序列号
+            return json.dumps(state, ensure_ascii=False)
 
         @app.get("/api/history")
         def api_history():
@@ -169,31 +177,7 @@ class WebServer:
                 response.status = 500
                 return json.dumps({"ok": False, "error": str(e)})
 
-        # ---- SSE 实时流 ----
-
-        @app.get("/api/events/stream")
-        def api_events_stream():
-            """Server-Sent Events 实时事件推送"""
-            response.content_type = "text/event-stream"
-            response.set_header("Cache-Control", "no-cache")
-            response.set_header("Connection", "keep-alive")
-            response.set_header("X-Accel-Buffering", "no")
-
-            def event_generator():
-                # 发送初始状态
-                state = collector.get_state()
-                state["system"] = collector.get_system_info()
-                yield f"data: {json.dumps({'type': 'state', 'data': state}, ensure_ascii=False)}\n\n"
-
-                while self._running:
-                    event = collector.poll_events(timeout=1.0)
-                    if event:
-                        yield f"data: {json.dumps({'type': 'event', 'data': event}, ensure_ascii=False)}\n\n"
-                    else:
-                        # 心跳保活
-                        yield ": heartbeat\n\n"
-
-            return event_generator()
+        # ---- 实时事件 (前端轮询 /api/status 获取) ----
 
         # ---- CORS (开发用) ----
 

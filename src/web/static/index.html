@@ -336,6 +336,8 @@ document.addEventListener('alpine:init', () => {
     configText: '',
     configMsg: '',
     audioPct: 0,
+    seq: 0,
+    _pollTimer: null,
     // 结构化表单
     schema: [],
     categories: [],
@@ -350,10 +352,8 @@ document.addEventListener('alpine:init', () => {
     audioDevices: {input: [], output: []},
 
     async init() {
-      this.loadAll();
-      this.connectSSE();
-      setInterval(() => this.loadAll(), 30000);
-      // 先拉 schema，再拉 config 并用 schema 默认值补缺
+      await this.loadInitialState();
+      this.startPolling();
       this.fetchDevices();
       await this.loadSchema();
       await this.fetchConfig();
@@ -365,47 +365,64 @@ document.addEventListener('alpine:init', () => {
       });
     },
 
-    async loadAll() {
+    // ---- 实时轮询 (300ms 间隔, 轮询 /api/status) ----
+
+    async loadInitialState() {
       try {
-        const [h, m] = await Promise.all([
-          fetch('/api/history?n=100').then(r=>r.json()),
-          fetch('/api/messages?n=30').then(r=>r.json()),
-        ]);
-        this.events = h || [];
-        this.messages = m || [];
-      } catch(e) { console.error('loadAll:', e); }
+        const data = await fetch('/api/status').then(r=>r.json());
+        this.applyState(data);
+        this.seq = data._seq || 0;
+      } catch(e) { console.error('loadInitialState:', e); }
     },
 
-    connectSSE() {
-      const es = new EventSource('/api/events/stream');
-      es.onmessage = (msg) => {
-        const d = JSON.parse(msg.data);
-        if (d.type === 'state') {
-          this.state = d.data;
-          this.system = d.data.system || this.system;
-          this.audioPct = Math.min(1, (this.state.audio_rms || 0) / 0.1);
-        } else if (d.type === 'event') {
-          this.events.unshift(d.data);
-          if (this.events.length > 200) this.events.pop();
-          // 新消息自动刷新对话
-          if (['ASR_RESULT','LLM_RESPONSE'].includes(d.data.event)) {
-            this.refreshMessages();
-          }
+    startPolling() {
+      if (this._pollTimer) clearInterval(this._pollTimer);
+      this._pollTimer = setInterval(() => this.poll(), 300);
+    },
+
+    async poll() {
+      try {
+        const data = await fetch('/api/status').then(r=>r.json());
+        if (!data) return;
+        // 状态全量刷新
+        this.applyState(data);
+        // 事件增量合并
+        const newSeq = data._seq || 0;
+        if (newSeq > (this.seq || 0)) {
+          this.mergeEvents(data._events || []);
+          this.seq = newSeq;
         }
-      };
-      es.onerror = () => { /* 自动重连 */ };
+      } catch(e) { /* 忽略偶发网络错误 */ }
     },
 
-    async refreshMessages() {
-      try {
-        const m = await fetch('/api/messages?n=30').then(r=>r.json());
-        this.messages = m || [];
-        // 滚动到底部
-        this.$nextTick(() => {
-          const el = this.$refs.chatScroll;
-          if (el) el.scrollTop = el.scrollHeight;
-        });
-      } catch(e) {}
+    applyState(s) {
+      if (!s) return;
+      this.state = s;
+      this.audioPct = Math.min(1, (s.audio_rms || 0) / 0.1);
+      this.applySystem(s.system);
+      if (s.messages) {
+        const prev = this.messages.length;
+        this.messages = s.messages;
+        if (this.messages.length !== prev) {
+          this.$nextTick(() => {
+            const el = this.$refs.chatScroll;
+            if (el) el.scrollTop = el.scrollHeight;
+          });
+        }
+      }
+    },
+
+    applySystem(sys) {
+      if (!sys || !('cpu_percent' in sys)) return;  // psutil 不可用则跳过
+      this.system = sys;
+    },
+
+    mergeEvents(newEvents) {
+      if (!newEvents || !newEvents.length) return;
+      for (const ev of newEvents.reverse()) {
+        this.events.unshift(ev);
+      }
+      if (this.events.length > 200) this.events.length = 200;
     },
 
     async sendText(el) {
