@@ -162,7 +162,7 @@ SCHEMA: List[ConfigField] = [
     ConfigField(key="llm.base_url", label="API 地址", category="LLM",
                 field_type="string", default="https://api.deepseek.com", advanced=True),
     ConfigField(key="llm.max_tokens", label="最大 Token 数", category="LLM",
-                field_type="number", default=1024, min_value=64, max_value=8192, step=64,
+                field_type="number", default=1000000, min_value=64, max_value=1000000, step=64,
                 restart_required=False),
     ConfigField(key="llm.temperature", label="温度", category="LLM",
                 field_type="number", default=0.7, min_value=0, max_value=2, step=0.1,
