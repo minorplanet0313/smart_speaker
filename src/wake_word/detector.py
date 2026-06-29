@@ -120,13 +120,14 @@ class WakeWordDetector:
         self._audio_buffer = np.append(self._audio_buffer, audio_frame)
 
         # 每约 2 秒打印一次音频能量 (调试用)
-        if not hasattr(self, '_debug_sample_count'):
-            self._debug_sample_count = 0
-            self._debug_rms_sum = 0.0
-            self._debug_predict_count = 0
-            self._debug_max_score = 0.0
-        self._debug_sample_count += len(audio_frame)
-        self._debug_rms_sum += float(np.sqrt(np.mean(np.square(audio_frame))) if len(audio_frame) > 0 else 0.0)
+        if logger.isEnabledFor(10):  # DEBUG level
+            if not hasattr(self, '_debug_sample_count'):
+                self._debug_sample_count = 0
+                self._debug_rms_sum = 0.0
+                self._debug_predict_count = 0
+                self._debug_max_score = 0.0
+            self._debug_sample_count += len(audio_frame)
+            self._debug_rms_sum += float(np.sqrt(np.mean(np.square(audio_frame))) if len(audio_frame) > 0 else 0.0)
 
         # 等累积到足够的样本数再做推理
         if len(self._audio_buffer) >= self._samples_per_chunk:
@@ -141,21 +142,22 @@ class WakeWordDetector:
 
                 # predictions 是 dict: {model_name: score}
                 for model_name, score in predictions.items():
-                    if score > self._debug_max_score:
-                        self._debug_max_score = score
-                    # 每 ~2 秒输出一次诊断信息
-                    if self._debug_sample_count >= 32000:  # ~2s of audio
-                        avg_rms = self._debug_rms_sum / (self._debug_sample_count / len(audio_frame)) if len(audio_frame) > 0 else 0
-                        logger.debug(
-                            f"唤醒诊断: 已处理 {self._debug_sample_count/16000:.1f}s 音频, "
-                            f"RMS={avg_rms:.4f}, predict次数={self._debug_predict_count}, "
-                            f"当前分数={score:.4f}, 最高分数={self._debug_max_score:.4f}, "
-                            f"阈值={self.threshold}"
-                        )
-                        self._debug_sample_count = 0
-                        self._debug_rms_sum = 0.0
-                        self._debug_predict_count = 0
-                        self._debug_max_score = 0.0
+                    if logger.isEnabledFor(10):
+                        if score > self._debug_max_score:
+                            self._debug_max_score = score
+                        # 每 ~2 秒输出一次诊断信息
+                        if self._debug_sample_count >= 32000:  # ~2s of audio
+                            avg_rms = self._debug_rms_sum / (self._debug_sample_count / len(audio_frame)) if len(audio_frame) > 0 else 0
+                            logger.debug(
+                                f"唤醒诊断: 已处理 {self._debug_sample_count/16000:.1f}s 音频, "
+                                f"RMS={avg_rms:.4f}, predict次数={self._debug_predict_count}, "
+                                f"当前分数={score:.4f}, 最高分数={self._debug_max_score:.4f}, "
+                                f"阈值={self.threshold}"
+                            )
+                            self._debug_sample_count = 0
+                            self._debug_rms_sum = 0.0
+                            self._debug_predict_count = 0
+                            self._debug_max_score = 0.0
 
                     if score > self.threshold:
                         self._on_trigger(score)
@@ -167,12 +169,7 @@ class WakeWordDetector:
 
     def _on_trigger(self, confidence: float) -> None:
         """唤醒词触发"""
-        now = time.time()
-        # 冷却检查 (至少间隔 2 秒)
-        if now - self._last_trigger_time < 2.0:
-            return
-
-        self._last_trigger_time = now
+        self._last_trigger_time = time.time()
         logger.info(f"唤醒词触发! confidence={confidence:.3f}")
 
         # 通知所有回调

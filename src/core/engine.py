@@ -764,16 +764,22 @@ class SmartSpeakerEngine:
             logger.warning("无法切换到 SPEAKING 状态, 丢弃 TTS 输出")
             return
 
-        # 播放音频
+        # 异步播放 (独立线程, 不阻塞事件总线)
         self.event_bus.publish(Event.PLAYBACK_START, source="player")
-        try:
-            self.audio_player.play(audio_data, format=audio_format)
-            self.event_bus.publish(Event.PLAYBACK_DONE, source="player")
-        except Exception as e:
-            logger.error(f"播放失败: {e}")
-            self.event_bus.publish(
-                Event.ERROR, source="player", message=f"播放失败: {e}"
-            )
+
+        def _play_and_notify():
+            try:
+                self.audio_player.play(audio_data, format=audio_format)
+                self.event_bus.publish(Event.PLAYBACK_DONE, source="player")
+            except Exception as e:
+                logger.error(f"播放失败: {e}")
+                self.event_bus.publish(
+                    Event.ERROR, source="player", message=f"播放失败: {e}"
+                )
+
+        threading.Thread(
+            target=_play_and_notify, daemon=True, name="player-thread"
+        ).start()
 
     def _on_playback_done(self, event_data) -> None:
         """播放完成: 回到 IDLE"""

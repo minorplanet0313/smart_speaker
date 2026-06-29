@@ -43,6 +43,7 @@ class PiperTTS(BaseTTS):
         self.config_path = config_path or (model_path + ".json" if model_path else "")
         self._available = self._check_model()
         self._voice_name = "piper-zh"
+        self._voice = None  # 延迟加载缓存
 
     def _check_model(self) -> bool:
         """检查模型是否可用"""
@@ -60,6 +61,18 @@ class PiperTTS(BaseTTS):
         except ImportError:
             logger.info("piper-tts 未安装, 离线 TTS 不可用")
             return False
+
+    def _load_voice(self):
+        """延迟加载 Piper 语音模型 (只加载一次)"""
+        if self._voice is not None:
+            return self._voice
+        import piper.voice
+        logger.info(f"加载 Piper 模型: {self.model_path}")
+        self._voice = piper.voice.PiperVoice.load(
+            model_path=self.model_path,
+            config_path=self.config_path,
+        )
+        return self._voice
 
     def synthesize(self, text: str) -> TTSResult:
         """
@@ -81,13 +94,9 @@ class PiperTTS(BaseTTS):
 
         try:
             import wave
-            import piper.voice
 
-            # 加载语音模型
-            voice = piper.voice.PiperVoice.load(
-                model_path=self.model_path,
-                config_path=self.config_path,
-            )
+            # 加载语音模型 (首次调用时加载, 后续复用缓存)
+            voice = self._load_voice()
 
             # 合成
             audio_data = bytearray()
@@ -123,12 +132,7 @@ class PiperTTS(BaseTTS):
             return
 
         try:
-            import piper.voice
-
-            voice = piper.voice.PiperVoice.load(
-                model_path=self.model_path,
-                config_path=self.config_path,
-            )
+            voice = self._load_voice()
 
             for audio_bytes in voice.synthesize_stream_raw(text):
                 yield audio_bytes

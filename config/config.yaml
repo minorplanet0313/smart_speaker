@@ -44,9 +44,9 @@ asr:
   incremental: true          # 增量识别: 边听边识别, 降低感知延迟
   preprocess: true           # 音频预处理: 提升识别准确率
   vosk:
-    # Pi 3B+ (1GB RAM) 推荐小模型: ./models/vosk-model-small-cn-0.22 (42MB, ~85%)
-    # Pi 5 (4GB+ RAM) 可用大模型: ./models/vosk-model-cn-0.22 (1.3GB, ~92%)
-    model_path: "./models/vosk-model-cn-0.22"
+    # Pi 3B+ (1GB RAM) 默认小模型 (42MB, ~85%), 避免大模型 (1.3GB) 触发 swap
+    # Pi 5 (4GB+ RAM) 可切换大模型: ./models/vosk-model-cn-0.22 (1.3GB, ~92%)
+    model_path: "./models/vosk-model-small-cn-0.22"
     sample_rate: 16000
     words_list: null         # 可选: 自定义词典提升特殊词汇识别
   sherpa:

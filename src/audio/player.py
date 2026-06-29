@@ -87,8 +87,8 @@ class AudioPlayer:
                 output_device_index=self._find_output_device(),
             )
 
-            # 分块播放
-            chunk_size = 4096
+            # 分块播放 (小块 = 低打断延迟)
+            chunk_size = 1024  # 64ms @ 16kHz
             for i in range(0, len(samples_int16), chunk_size):
                 if self._stop_requested:
                     break
