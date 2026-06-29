@@ -65,6 +65,9 @@ class Event(Enum):
     # 技能事件
     SKILL_RESULT = auto()         # 技能执行结果
 
+    # 配置事件
+    CONFIG_UPDATED = auto()       # 配置在线更新
+
 
 @dataclass
 class EventData:

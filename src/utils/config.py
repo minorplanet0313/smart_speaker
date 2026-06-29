@@ -92,6 +92,15 @@ class Config:
     def to_dict(self) -> Dict[str, Any]:
         return dict(self._data)
 
+    def update_path(self, key_path: str, value: Any) -> None:
+        """按 dot-path 更新单个配置值 (仅内存, 不写磁盘)"""
+        self.set(key_path, value)
+
+    def reload(self) -> None:
+        """从磁盘重新加载配置，覆盖内存中的所有修改"""
+        if self._config_path:
+            self.load(self._config_path)
+
     def __repr__(self) -> str:
         return f"Config(path={self._config_path})"
 

@@ -374,6 +374,7 @@ class SmartSpeakerEngine:
             (Event.AUDIO_DEVICE_ERROR, self._on_error),
             (Event.ERROR, self._on_error),
             (Event.SHUTDOWN, self._on_shutdown),
+            (Event.CONFIG_UPDATED, self._on_config_updated),
         ]
         for event, handler in handlers:
             self.event_bus.subscribe(event, handler)
@@ -1270,6 +1271,76 @@ class SmartSpeakerEngine:
     def _on_shutdown(self, event_data) -> None:
         """接收到 SHUTDOWN 事件"""
         self.stop()
+
+    def _on_config_updated(self, event_data) -> None:
+        """处理配置在线更新"""
+        changed_keys = event_data.get("changed_keys", [])
+        if not changed_keys:
+            return
+        logger.info(f"配置在线更新: {', '.join(changed_keys)}")
+
+        restart_keys = []
+        for key in changed_keys:
+            if not self._apply_runtime_config(key):
+                restart_keys.append(key)
+
+        if restart_keys:
+            logger.warning(
+                f"以下配置需要重启才能生效: {', '.join(restart_keys)}"
+            )
+
+    def _apply_runtime_config(self, key: str) -> bool:
+        """
+        尝试在运行时应用一个配置变更。
+        Returns: True 表示已热生效, False 表示需要重启。
+        """
+        value = self.config.get(key)
+
+        # debug.save_audio — 直接赋值开关
+        if key == "debug.save_audio":
+            self._save_debug_audio_enabled = bool(value)
+            return True
+
+        # general.log_level — 更新全局日志级别
+        if key == "general.log_level":
+            import logging
+            level = getattr(logging, str(value).upper(), logging.INFO)
+            logging.getLogger("smart_speaker").setLevel(level)
+            return True
+
+        # VAD 参数 — 直接更新实例属性
+        if key == "audio.vad.threshold" and self.vad:
+            self.vad.threshold = float(value)
+            return True
+        if key == "audio.vad.min_speech_duration_ms" and self.vad:
+            self.vad.min_speech_duration_ms = int(value)
+            return True
+        if key == "audio.vad.min_silence_duration_ms" and self.vad:
+            self.vad.min_silence_duration_ms = int(value)
+            return True
+
+        # 这些 key 运行时每次都会从 self.config.get() 重读，
+        # Phase 3b 已更新内存中的 Config._data，所以自动生效，无需额外操作。
+        if key in (
+            "wake_word.cooldown_ms",
+            "audio.sample_rate",
+            "audio.channels",
+            "audio.vad.enabled",
+            "general.name",
+            "general.wake_word",
+            "general.data_dir",
+            "asr.preprocess",
+            "asr.sherpa.num_threads",
+            "tts.edge.voice",
+            "tts.edge.rate",
+            "tts.edge.pitch",
+            "llm.max_tokens",
+            "llm.temperature",
+        ):
+            return True
+
+        # 其余所有配置需要重启
+        return False
 
     def get_status(self) -> dict:
         """获取运行状态"""

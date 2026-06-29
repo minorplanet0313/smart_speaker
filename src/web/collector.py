@@ -153,38 +153,67 @@ class WebEventCollector:
             info["psutil"] = False
         return info
 
+    def get_audio_devices(self) -> dict:
+        """获取可用音频设备列表（过滤虚拟设备，只保留真实硬件）"""
+        devices = {"input": [], "output": []}
+        if self._engine:
+            if self._engine.audio_capture:
+                devices["input"] = _filter_real_devices(
+                    self._engine.audio_capture.input_devices
+                )
+            if self._engine.audio_player:
+                devices["output"] = _filter_real_devices(
+                    self._engine.audio_player.output_devices
+                )
+        return devices
+
     def get_config(self) -> dict:
-        """获取当前配置（脱敏）"""
+        """获取当前配置（递归脱敏 + 返回完整嵌套结构）"""
         if self._engine:
             raw = getattr(self._engine.config, '_data', {})
-            # 脱敏：隐藏 api_key / secret 类字段
-            safe = {}
-            for k, v in raw.items():
-                if isinstance(v, dict):
-                    safe[k] = {
-                        sk: ("***" if any(x in sk.lower() for x in ("key", "secret", "token")) else sv)
-                        for sk, sv in v.items()
-                    }
-                else:
-                    safe[k] = v
-            return safe
+            return _sanitize_config(raw)
         return {}
 
     def update_config(self, updates: dict) -> dict:
-        """在线更新配置（写入 config.yaml）"""
+        """在线更新配置: 校验 → 写磁盘 → 更新内存 → 发事件"""
         if not self._engine:
             return {"ok": False, "error": "引擎未初始化"}
+
+        # 1. 校验
+        from src.web.config_schema import validate_updates
+        errors = validate_updates(updates)
+        if errors:
+            return {"ok": False, "error": "校验失败:\n" + "\n".join(f"  • {e}" for e in errors)}
+
         try:
             import yaml
             from pathlib import Path
+
             config_path = Path(self._engine.config._config_path)
+
+            # 2. 读取当前配置 → 深度合并 → 写入磁盘
             with open(config_path, 'r') as f:
                 current = yaml.safe_load(f) or {}
-            # 深度合并
             _deep_merge(current, updates)
             with open(config_path, 'w') as f:
                 yaml.dump(current, f, allow_unicode=True, default_flow_style=False)
-            return {"ok": True}
+
+            # 3. 同步更新内存中的 Config 单例
+            changed = _flatten_keys(updates)
+            for key in changed:
+                val = _get_nested(current, key)
+                if val is not None:
+                    self._engine.config.update_path(key, val)
+
+            # 4. 发布事件通知引擎
+            EventBus.instance().publish(
+                Event.CONFIG_UPDATED,
+                source="web",
+                updates=updates,
+                changed_keys=list(changed),
+            )
+
+            return {"ok": True, "changed_keys": list(changed)}
         except Exception as e:
             return {"ok": False, "error": str(e)}
 
@@ -198,6 +227,46 @@ class WebEventCollector:
             return None
 
 
+def _filter_real_devices(devices: list) -> list:
+    """过滤虚拟/内部 ALSA 设备，只保留真实可用设备"""
+    # 明显的虚拟/内部设备名黑名单
+    _VIRTUAL_PATTERNS = [
+        "samplerate", "speexrate", "surround", "dmix", "dsnooze",
+        "front", "rear", "center_lfe", "side", "iec958",
+        "hdmi", "modem", "phoneline", "usb_stream", "oss",
+        "upmix", "vdownmix", "null",
+    ]
+    # 常用别名设备 — 即使声道数高也保留
+    _KEEP_DEVICES = {"default", "pulse", "sysdefault"}
+    result = []
+    for d in devices:
+        name = d.get("name", "")
+        channels = d.get("channels", 0)
+        is_keep = name.strip() in _KEEP_DEVICES
+        # 跳过明显虚拟设备（声道数 > 16 肯定不是物理设备, 常用别名除外）
+        if not is_keep and channels > 16:
+            continue
+        # 跳过名字含虚拟关键词的（常用别名除外）
+        if not is_keep and any(p in name.lower() for p in _VIRTUAL_PATTERNS):
+            continue
+        result.append(d)
+    return result
+
+
+def _sanitize_config(d: dict) -> dict:
+    """递归脱敏配置 — 所有层级中 key 含 key/secret/token 的叶子值替换为 ***"""
+    result = {}
+    for k, v in d.items():
+        if isinstance(v, dict):
+            result[k] = _sanitize_config(v)
+        else:
+            if any(x in k.lower() for x in ("key", "secret", "token")):
+                result[k] = "***"
+            else:
+                result[k] = v
+    return result
+
+
 def _deep_merge(base: dict, updates: dict) -> None:
     """递归合并 updates 到 base"""
     for k, v in updates.items():
@@ -205,3 +274,27 @@ def _deep_merge(base: dict, updates: dict) -> None:
             _deep_merge(base[k], v)
         else:
             base[k] = v
+
+
+def _flatten_keys(d: dict, prefix: str = "") -> set:
+    """将嵌套 dict 展开为 dot-path key 集合, e.g. {'audio.vad.threshold', ...}"""
+    keys = set()
+    for k, v in d.items():
+        full_key = f"{prefix}.{k}" if prefix else k
+        if isinstance(v, dict):
+            keys |= _flatten_keys(v, full_key)
+        else:
+            keys.add(full_key)
+    return keys
+
+
+def _get_nested(d: dict, key_path: str):
+    """按 dot-path 从嵌套 dict 中取值"""
+    parts = key_path.split(".")
+    current = d
+    for p in parts:
+        if isinstance(current, dict):
+            current = current.get(p)
+        else:
+            return None
+    return current

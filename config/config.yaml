@@ -1,151 +1,128 @@
-# ============================================================
-# Smart Speaker - 主配置文件
-# ============================================================
-
-# --- 通用设置 ---
-general:
-  name: "小智音箱"
-  wake_word: "小智小智"
-  language: "zh-CN"
-  sample_rate: 16000
-  log_level: "INFO"          # DEBUG | INFO | WARNING | ERROR
-  data_dir: "./data"
-
-# --- 音频设置 ---
+asr:
+  cloud:
+    aliyun:
+      access_key_id: ${ALIYUN_ACCESS_KEY_ID}
+      access_key_secret: ${ALIYUN_ACCESS_KEY_SECRET}
+      app_key: ${ALIYUN_APP_KEY}
+    baidu:
+      api_key: ${BAIDU_API_KEY}
+      app_id: ${BAIDU_APP_ID}
+      secret_key: ${BAIDU_SECRET_KEY}
+    provider: baidu
+    tencent:
+      region: ap-guangzhou
+      secret_id: ${TENCENT_SECRET_ID}
+      secret_key: ${TENCENT_SECRET_KEY}
+  fallback: cloud
+  incremental: true
+  preprocess: true
+  primary: sherpa
+  sherpa:
+    decoding_method: greedy_search
+    model_path: ./models/sherpa-onnx-streaming-zipformer-zh-14M-2023-02-23
+    num_threads: 2
+  vosk:
+    model_path: ./models/vosk-model-small-cn-0.22
+    sample_rate: 16000
+    words_list: null
 audio:
-  sample_rate: 16000
   channels: 1
-  chunk_size: 1024           # 每次读取的帧数 (小值 = 低延迟, 大值 = 低CPU)
-  format: "int16"            # int16 | float32
+  chunk_size: 1024
   device:
-    microphone: null         # null = 系统默认, 或指定设备名
-    speaker: null            # null = 系统默认
+    microphone: null
+    speaker: null
+  format: int16
+  sample_rate: 16000
   vad:
     enabled: true
-    threshold: 0.3           # 语音检测阈值 [0, 1] (降低以捕捉轻声)
-    min_speech_duration_ms: 100   # 最短语音时长 (更快捕获短词)
-    min_silence_duration_ms: 400  # 静音判定时长 (更快的尾端点检测)
-    max_speech_duration_ms: 15000 # 最长录音时长 (防超时)
-    speech_pad_ms: 300       # 语音前后填充 (减少尾部空白)
-
-# --- 唤醒词检测 ---
-wake_word:
-  enabled: true
-  engine: "openwakeword"
-  model_path: "./models/openwakeword/xiao_zhi.onnx"  # 中文唤醒词 "小智" (社区预训练模型)
-  threshold: 0.5            # 检测阈值 [0, 1]
-  cooldown_ms: 2000         # 触发后冷却时间 (防重复触发)
-  inference_framework: "onnx"  # onnx | tflite
-
-# --- 语音识别 (ASR) ---
-asr:
-  primary: "sherpa"            # vosk | sherpa | cloud
-  fallback: "cloud"          # 降级方案
-  incremental: true          # 增量识别: 边听边识别, 降低感知延迟
-  preprocess: true           # 音频预处理: 提升识别准确率
-  vosk:
-    # Pi 3B+ (1GB RAM) 默认小模型 (42MB, ~85%), 避免大模型 (1.3GB) 触发 swap
-    # Pi 5 (4GB+ RAM) 可切换大模型: ./models/vosk-model-cn-0.22 (1.3GB, ~92%)
-    model_path: "./models/vosk-model-small-cn-0.22"
-    sample_rate: 16000
-    words_list: null         # 可选: 自定义词典提升特殊词汇识别
-  sherpa:
-    # sherpa-onnx 本地流式 ASR (Pi 3B+ 推荐 14M 模型)
-    # 下载: wget https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-streaming-zipformer-zh-14M-2025-06-30.tar.bz2
-    model_path: "./models/sherpa-onnx-streaming-zipformer-zh-14M-2023-02-23"
-    num_threads: 2
-    decoding_method: "greedy_search"  # greedy_search | modified_beam_search
-  cloud:
-    provider: "baidu"        # baidu | tencent | aliyun
-    baidu:
-      app_id: "${BAIDU_APP_ID}"
-      api_key: "${BAIDU_API_KEY}"
-      secret_key: "${BAIDU_SECRET_KEY}"
-    tencent:
-      secret_id: "${TENCENT_SECRET_ID}"
-      secret_key: "${TENCENT_SECRET_KEY}"
-      region: "ap-guangzhou"
-    aliyun:
-      access_key_id: "${ALIYUN_ACCESS_KEY_ID}"
-      access_key_secret: "${ALIYUN_ACCESS_KEY_SECRET}"
-      app_key: "${ALIYUN_APP_KEY}"
-
-# --- 大语言模型 (LLM) ---
-llm:
-  provider: "deepseek"
-  model: "deepseek-chat"
-  api_key: "${DEEPSEEK_API_KEY}"
-  base_url: "https://api.deepseek.com"
-  max_tokens: 1024
-  temperature: 0.7
-  stream: true               # 流式输出 (降低首字延迟)
-  timeout_seconds: 30
-  retry:
-    max_retries: 3
-    backoff_base: 2
-
-# --- 语音合成 (TTS) ---
-tts:
-  primary: "edge"            # edge | piper
-  fallback: "piper"          # 离线降级
-  edge:
-    voice: "zh-CN-liaoning-XiaobeiNeural"  # 东北话
-    rate: "+0%"              # 语速: -50% ~ +100%
-    pitch: "+0Hz"            # 音调
-    proxy: null              # 代理设置
-  piper:
-    model_path: "./models/piper-voices/zh_CN-huayan-medium.onnx"
-    config_path: null
-
-# --- 对话上下文 ---
+    max_speech_duration_ms: 15000
+    min_silence_duration_ms: 400
+    min_speech_duration_ms: 100
+    speech_pad_ms: 300
+    threshold: 0.3
 conversation:
-  max_history_rounds: 20     # 最大对话轮数
-  context_timeout_seconds: 300  # 上下文过期时间 (5分钟)
-  system_prompt: |
-    你是一个智能语音助手，名叫"小智"。你的特点是：
+  context_timeout_seconds: 300
+  max_history_rounds: 20
+  system_prompt: '你是一个智能语音助手，名叫"小智"。你的特点是：
+
     1. 回答简洁明了，适合语音交互（不要太长）
+
     2. 语气友好、自然，像朋友聊天
+
     3. 说话带东北口音，性格豪爽幽默，像东北老铁
+
     4. 常用东北词汇：嘎哈、咋地、整一个、得劲儿、老好使了
+
     5. 支持中文，偶尔可以使用英文词汇
+
     6. 如果不确定答案，诚实地告诉用户
+
     7. 回答控制在 100 字以内，除非用户要求详细解释
 
-# --- 技能设置 ---
-skills:
-  auto_discover: true
-  builtin_enabled:
-    - "chat"        # 通用聊天 (LLM)
-    - "time"        # 时间查询
-    - "weather"     # 天气查询
-  weather:
-    api_key: "${WEATHER_API_KEY}"    # 和风天气 API Key
-    city: "auto"                     # auto = 基于 IP 定位
-
-# --- 调试设置 ---
+    '
 debug:
-  save_audio: false          # 是否保存每次语音结束的调试 WAV
-
-# --- GPIO 设置 (可选) ---
+  save_audio: false
+general:
+  data_dir: ./data
+  language: zh-CN
+  log_level: INFO
+  name: 小智音箱
+  sample_rate: 16000
+  wake_word: 小智小智
 gpio:
+  button:
+    action_pin: 23
+    enabled: true
+    mute_pin: 22
   enabled: false
   led:
     enabled: true
-    pin: 17              # GPIO17 (BCM编号)
-    type: "rgb"          # single | rgb
-  button:
-    enabled: true
-    mute_pin: 22         # GPIO22 - 静音按钮
-    action_pin: 23       # GPIO23 - 快捷操作按钮
-
-# --- Web 管理面板 (可选) ---
-web:
-  enabled: true          # true 启用, 默认关闭
-  host: "0.0.0.0"
-  port: 8080
-
-# --- 性能设置 ---
+    pin: 17
+    type: rgb
+llm:
+  api_key: ${DEEPSEEK_API_KEY}
+  base_url: https://api.deepseek.com
+  max_tokens: 1024
+  model: deepseek-chat
+  provider: deepseek
+  retry:
+    backoff_base: 2
+    max_retries: 3
+  stream: true
+  temperature: 0.7
+  timeout_seconds: 30
 performance:
-  onnx_threads: 2        # ONNX Runtime 线程数 (Pi3 推荐 2)
-  audio_buffer_seconds: 0.5  # 音频环形缓冲区大小
-  gc_threshold: 1000     # 垃圾回收阈值
+  audio_buffer_seconds: 0.5
+  gc_threshold: 1000
+  onnx_threads: 2
+skills:
+  auto_discover: true
+  builtin_enabled:
+  - chat
+  - time
+  - weather
+  weather:
+    api_key: ${WEATHER_API_KEY}
+    city: auto
+tts:
+  edge:
+    pitch: +0Hz
+    proxy: null
+    rate: +0%
+    voice: zh-CN-liaoning-XiaobeiNeural
+  fallback: piper
+  piper:
+    config_path: null
+    model_path: ./models/piper-voices/zh_CN-huayan-medium.onnx
+  primary: edge
+wake_word:
+  cooldown_ms: 2000
+  enabled: true
+  engine: openwakeword
+  inference_framework: onnx
+  model_path: ./models/openwakeword/xiao_zhi.onnx
+  threshold: 0.5
+web:
+  enabled: true
+  host: 0.0.0.0
+  port: 8080

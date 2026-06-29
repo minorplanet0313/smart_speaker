@@ -71,6 +71,28 @@
   .scroll { max-height:300px; overflow-y:auto; }
   .scroll::-webkit-scrollbar { width:4px; }
   .scroll::-webkit-scrollbar-thumb { background:var(--border); border-radius:2px; }
+
+  /* Config form */
+  .config-field { padding:10px 0; border-bottom:1px solid var(--border); }
+  .config-field.error { border-left:3px solid var(--red); padding-left:8px; }
+  .config-label { display:flex; align-items:center; gap:8px; font-size:.82rem; font-weight:500; margin-bottom:2px; }
+  .config-desc { display:block; font-size:.7rem; color:var(--muted); margin-bottom:6px; }
+  .config-input, .config-select { width:100%; padding:6px 10px; border-radius:6px; border:1px solid var(--border); background:var(--bg); color:var(--text); font-size:.8rem; }
+  .config-select { cursor:pointer; }
+  .restart-badge { font-size:.65rem; padding:1px 6px; border-radius:8px; background:var(--yellow); color:#000; }
+  .no-restart-badge { font-size:.65rem; padding:1px 6px; border-radius:8px; background:var(--green); color:#fff; }
+  .number-row { display:flex; align-items:center; gap:12px; }
+  .number-row input[type=range] { flex:1; accent-color:var(--blue); }
+  .number-value { min-width:40px; text-align:right; font-family:monospace; font-size:.8rem; color:var(--muted); }
+  .field-error { display:block; font-size:.7rem; color:var(--red); margin-top:4px; }
+  .toggle { position:relative; display:inline-block; width:40px; height:22px; }
+  .toggle input { opacity:0; width:0; height:0; }
+  .toggle-slider { position:absolute; cursor:pointer; inset:0; background:var(--border); border-radius:22px; transition:.2s; }
+  .toggle-slider:before { content:""; position:absolute; height:16px; width:16px; left:3px; bottom:3px; background:white; border-radius:50%; transition:.2s; }
+  .toggle input:checked + .toggle-slider { background:var(--blue); }
+  .toggle input:checked + .toggle-slider:before { transform:translateX(18px); }
+  .config-msg-success { color:var(--green); }
+  .config-msg-error { color:var(--red); }
 </style>
 </head>
 <body>
@@ -83,7 +105,7 @@
     <span class="tag" x-text="state.state||'idle'"></span>
     <span style="flex:1"></span>
     <button class="btn-sm" @click="doWake">唤醒</button>
-    <button class="btn-sm danger" @click="post('/api/config',{web:{enabled:false}})">关闭 Web</button>
+    <button class="btn-sm danger" @click="closeWeb">关闭 Web</button>
   </div>
 
   <!-- Grid -->
@@ -124,7 +146,9 @@
   <div class="tabs" style="margin-top:16px">
     <button class="tab" :class="{active:tab==='chat'}" @click="tab='chat'">对话</button>
     <button class="tab" :class="{active:tab==='events'}" @click="tab='events'">事件流</button>
-    <button class="tab" :class="{active:tab==='config'}" @click="tab='config'">配置</button>
+    <button class="tab" :class="{active:tab==='config'}" @click="tab='config'">
+      配置<span x-show="Object.keys(formDirty).length>0" style="color:var(--yellow);margin-left:2px;">*</span>
+    </button>
   </div>
 
   <!-- 对话 -->
@@ -161,11 +185,140 @@
 
   <!-- 配置 -->
   <div class="card" x-show="tab==='config'">
-    <h2>当前配置</h2>
-    <textarea class="config-area" x-model="configText"></textarea>
-    <div class="input-row">
-      <button @click="saveConfig">保存配置</button>
-      <span style="font-size:.75rem;color:var(--muted);align-self:center;" x-text="configMsg"></span>
+    <div style="display:flex;gap:8px;align-items:center;margin-bottom:12px;">
+      <h2 style="flex:1;margin:0;">配置</h2>
+      <button class="btn-sm" @click="configTab='form'" :class="{active:configTab==='form'}">表单</button>
+      <button class="btn-sm" @click="configTab='raw'" :class="{active:configTab==='raw'}">JSON</button>
+      <label style="font-size:.75rem;color:var(--muted);display:flex;align-items:center;gap:4px;">
+        <input type="checkbox" x-model="showAdvanced"> 高级
+      </label>
+    </div>
+
+    <!-- 结构化表单 -->
+    <div x-show="configTab==='form' && configLoading" style="text-align:center;padding:40px;color:var(--muted);font-size:.85rem;">
+      加载配置中...
+    </div>
+
+    <div x-show="configTab==='form' && !configLoading">
+      <!-- 分类标签 -->
+      <div class="tabs" style="flex-wrap:wrap;">
+        <template x-for="cat in categories" :key="cat">
+          <button class="tab" :class="{active:activeCategory===cat}" @click="activeCategory=cat" x-text="cat"></button>
+        </template>
+      </div>
+
+      <!-- 字段列表 -->
+      <div class="scroll" style="max-height:400px;">
+        <template x-for="field in visibleFields" :key="field.key">
+          <div class="config-field" :class="{error: formErrors[field.key]}">
+            <label class="config-label">
+              <span x-text="field.label"></span>
+              <span x-show="field.restart_required" class="restart-badge">需重启</span>
+              <span x-show="!field.restart_required" class="no-restart-badge">热生效</span>
+            </label>
+            <span class="config-desc" x-text="field.description" x-show="field.description"></span>
+
+            <!-- Boolean -->
+            <template x-if="field.type==='boolean'">
+              <label class="toggle">
+                <input type="checkbox" x-model="formValues[field.key]"
+                       @change="formDirty[field.key]=true;delete formErrors[field.key]">
+                <span class="toggle-slider"></span>
+              </label>
+            </template>
+
+            <!-- Number -->
+            <template x-if="field.type==='number'">
+              <div class="number-row">
+                <input type="range" :min="field.min_value||0" :max="field.max_value||100"
+                       :step="field.step||1"
+                       x-model.number="formValues[field.key]"
+                       @input="formDirty[field.key]=true;delete formErrors[field.key]">
+                <span class="number-value" x-text="formValues[field.key]!=null?formValues[field.key]:field.default"></span>
+              </div>
+            </template>
+
+            <!-- Enum -->
+            <template x-if="field.type==='enum'">
+              <select x-init="$nextTick(() => { $el.value = formValues[field.key] || field.default })"
+                      @change="formValues[field.key]=$event.target.value;formDirty[field.key]=true;delete formErrors[field.key]"
+                      class="config-select">
+                <template x-for="opt in field.enum_values" :key="opt">
+                  <option :value="opt" x-text="opt"></option>
+                </template>
+              </select>
+            </template>
+
+            <!-- Device select (动态设备列表) -->
+            <template x-if="field.type==='device_select'">
+              <select x-init="$nextTick(() => { $el.value = formValues[field.key] || field.default })"
+                      @change="formValues[field.key]=$event.target.value;formDirty[field.key]=true;delete formErrors[field.key]"
+                      class="config-select">
+                <option value="">系统默认（留空）</option>
+                <template x-for="dev in (audioDevices[field.device_type]||[])">
+                  <option :value="dev.name"
+                          x-text="dev.name + ' (' + dev.channels + 'ch)'
+                                  + (dev.name==='default'||dev.name==='pulse'?' ★推荐':'')
+                                  + (dev.name.includes('hw:')?' [硬件直连]':'')"></option>
+                </template>
+              </select>
+              <span class="config-desc" style="margin-top:4px;">
+                💡 <b>default</b> 或 <b>pulse</b> 最省心，自动路由到正确设备；
+                <b>hw:X,Y</b> 是硬件直连，固定到某个接口
+              </span>
+            </template>
+
+            <!-- Secret -->
+            <template x-if="field.type==='secret'">
+              <input type="password"
+                     placeholder="输入新值（当前已隐藏）"
+                     x-model="formValues[field.key]"
+                     @input="formDirty[field.key]=true;delete formErrors[field.key]"
+                     class="config-input">
+            </template>
+
+            <!-- Multiline -->
+            <template x-if="field.type==='multiline'">
+              <textarea class="config-area" style="min-height:80px;"
+                        :placeholder="field.default"
+                        x-model="formValues[field.key]"
+                        @input="formDirty[field.key]=true;delete formErrors[field.key]"></textarea>
+            </template>
+
+            <!-- String -->
+            <template x-if="field.type==='string'">
+              <input type="text"
+                     :placeholder="field.default"
+                     x-model="formValues[field.key]"
+                     @input="formDirty[field.key]=true;delete formErrors[field.key]"
+                     class="config-input">
+            </template>
+
+            <span class="field-error" x-text="formErrors[field.key]" x-show="formErrors[field.key]"></span>
+          </div>
+        </template>
+        <div x-show="visibleFields.length===0" style="padding:20px;text-align:center;color:var(--muted);font-size:.8rem;">
+          该分类下没有可显示的字段<br><small>尝试开启"高级"选项</small>
+        </div>
+      </div>
+
+      <!-- 保存栏 -->
+      <div class="input-row" style="margin-top:12px;padding-top:12px;border-top:1px solid var(--border);">
+        <button @click="saveFormConfig" :disabled="saving" x-text="saving?'保存中...':'保存配置'"></button>
+        <span style="font-size:.75rem;align-self:center;" x-text="configMsg"
+              :class="configMsg.includes('失败')||configMsg.startsWith('✗')?'config-msg-error':'config-msg-success'"></span>
+        <span style="font-size:.7rem;color:var(--muted);align-self:center;" x-show="Object.keys(formDirty).length>0"
+              x-text="Object.keys(formDirty).length+' 项已修改'"></span>
+      </div>
+    </div>
+
+    <!-- JSON 编辑模式 -->
+    <div x-show="configTab==='raw'">
+      <textarea class="config-area" x-model="configText"></textarea>
+      <div class="input-row">
+        <button @click="saveConfig">保存配置</button>
+        <span style="font-size:.75rem;color:var(--muted);align-self:center;" x-text="configMsg"></span>
+      </div>
     </div>
   </div>
 
@@ -183,26 +336,43 @@ document.addEventListener('alpine:init', () => {
     configText: '',
     configMsg: '',
     audioPct: 0,
+    // 结构化表单
+    schema: [],
+    categories: [],
+    activeCategory: null,
+    showAdvanced: false,
+    formValues: {},
+    formErrors: {},
+    formDirty: {},
+    saving: false,
+    configTab: 'form',
+    configLoading: true,
+    audioDevices: {input: [], output: []},
 
     async init() {
       this.loadAll();
       this.connectSSE();
-      setInterval(() => this.loadAll(), 5000);
+      setInterval(() => this.loadAll(), 30000);
+      // 先拉 schema，再拉 config 并用 schema 默认值补缺
+      this.fetchDevices();
+      await this.loadSchema();
+      await this.fetchConfig();
+      window.addEventListener('beforeunload', (e) => {
+        if (Object.keys(this.formDirty).length > 0) {
+          e.preventDefault();
+          e.returnValue = '';
+        }
+      });
     },
 
     async loadAll() {
       try {
-        const [s, h, m, sys] = await Promise.all([
-          fetch('/api/status').then(r=>r.json()),
+        const [h, m] = await Promise.all([
           fetch('/api/history?n=100').then(r=>r.json()),
           fetch('/api/messages?n=30').then(r=>r.json()),
-          fetch('/api/system').then(r=>r.json()),
         ]);
-        this.state = s || {};
         this.events = h || [];
         this.messages = m || [];
-        this.system = sys || {};
-        this.audioPct = Math.min(1, (this.state.audio_rms || 0) / 0.1);
       } catch(e) { console.error('loadAll:', e); }
     },
 
@@ -266,6 +436,134 @@ document.addEventListener('alpine:init', () => {
       if (d.error) return d.error.slice(0,40);
       if (d.to) return d.from + '→' + d.to;
       return '';
+    },
+
+    async fetchDevices() {
+      try {
+        this.audioDevices = await fetch('/api/audio/devices').then(r=>r.json());
+      } catch(e) { console.error('fetchDevices:', e); }
+    },
+
+    async fetchConfig() {
+      try {
+        const cfg = await fetch('/api/config').then(r=>r.json());
+        this.configText = JSON.stringify(cfg || {}, null, 2);
+        // 从 API 加载实际配置值
+        this.formValues = this.configToFlat(cfg || {});
+        // 用 schema 默认值填充 schema 中有但 config 中缺失的 key
+        for (const f of this.schema) {
+          if (!(f.key in this.formValues)) {
+            this.formValues[f.key] = f.default;
+          }
+          // 脱敏字段置空，避免显示 *** 误导用户
+          if (f.type === 'secret' && this.formValues[f.key] === '***') {
+            this.formValues[f.key] = '';
+          }
+          // 设备字段保持 null → 前端显示"系统默认"
+        }
+      } catch(e) {
+        console.error('fetchConfig:', e);
+      } finally {
+        this.configLoading = false;
+      }
+    },
+
+    async loadSchema() {
+      try {
+        const [schema, cats] = await Promise.all([
+          fetch('/api/config/schema').then(r=>r.json()),
+          fetch('/api/config/categories').then(r=>r.json()),
+        ]);
+        this.schema = schema || [];
+        this.categories = cats || [];
+        if (this.categories.length > 0) this.activeCategory = this.categories[0];
+      } catch(e) { console.error('loadSchema:', e); }
+    },
+
+    configToFlat(obj, prefix='') {
+      const result = {};
+      for (const [k, v] of Object.entries(obj)) {
+        const path = prefix ? `${prefix}.${k}` : k;
+        if (v !== null && typeof v === 'object' && !Array.isArray(v)) {
+          Object.assign(result, this.configToFlat(v, path));
+        } else {
+          result[path] = v;
+        }
+      }
+      return result;
+    },
+
+    get visibleFields() {
+      return this.schema.filter(f =>
+        f.category === this.activeCategory &&
+        (this.showAdvanced || !f.advanced)
+      );
+    },
+
+    setFormValue(key, value) {
+      this.formValues[key] = value;
+      this.formDirty[key] = true;
+      delete this.formErrors[key];
+    },
+
+    async saveFormConfig() {
+      this.saving = true;
+      this.configMsg = '';
+      try {
+        const updates = this.buildNestedUpdates();
+        if (Object.keys(updates).length === 0) {
+          this.configMsg = '没有变更需要保存';
+          this.saving = false;
+          return;
+        }
+        const r = await fetch('/api/config', {
+          method:'POST',
+          headers:{'Content-Type':'application/json'},
+          body: JSON.stringify(updates),
+        }).then(r=>r.json());
+        if (r.ok) {
+          const n = (r.changed_keys||[]).length;
+          this.configMsg = n + ' 项已保存';
+          this.formDirty = {};
+          await this.fetchConfig();
+        } else {
+          this.configMsg = (r.error||'保存失败');
+        }
+      } catch(e) {
+        this.configMsg = '请求失败';
+      } finally {
+        this.saving = false;
+        if (this.configMsg.startsWith('✓') || (!isNaN(this.configMsg[0]) && this.configMsg.includes('项'))) {
+          setTimeout(() => { if (this.configMsg && !this.configMsg.startsWith('✗')) this.configMsg = ''; }, 3000);
+        }
+      }
+    },
+
+    buildNestedUpdates() {
+      const result = {};
+      for (const key of Object.keys(this.formDirty)) {
+        const parts = key.split('.');
+        let current = result;
+        for (let i = 0; i < parts.length - 1; i++) {
+          if (!current[parts[i]]) current[parts[i]] = {};
+          current = current[parts[i]];
+        }
+        current[parts[parts.length - 1]] = this.formValues[key];
+      }
+      return result;
+    },
+
+    async closeWeb() {
+      try {
+        const r = await fetch('/api/config', {
+          method:'POST',
+          headers:{'Content-Type':'application/json'},
+          body: JSON.stringify({web:{enabled:false}}),
+        }).then(r=>r.json());
+        this.configMsg = r.ok ? 'Web 已关闭，重启后生效' : '✗ ' + (r.error||'');
+      } catch(e) {
+        this.configMsg = '✗ 请求失败';
+      }
     },
 
     async saveConfig() {

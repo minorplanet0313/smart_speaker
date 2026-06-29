@@ -104,6 +104,23 @@ class WebServer:
             response.content_type = "application/json"
             return json.dumps(collector.get_config(), ensure_ascii=False)
 
+        @app.get("/api/audio/devices")
+        def api_audio_devices():
+            response.content_type = "application/json"
+            return json.dumps(collector.get_audio_devices(), ensure_ascii=False)
+
+        @app.get("/api/config/schema")
+        def api_config_schema():
+            from src.web.config_schema import get_schema_list
+            response.content_type = "application/json"
+            return json.dumps(get_schema_list(), ensure_ascii=False)
+
+        @app.get("/api/config/categories")
+        def api_config_categories():
+            from src.web.config_schema import get_categories
+            response.content_type = "application/json"
+            return json.dumps(get_categories(), ensure_ascii=False)
+
         @app.post("/api/config")
         def api_config_update():
             try:
