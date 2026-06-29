@@ -14,6 +14,10 @@ onnxruntime==1.18.0
 # --- Voice Activity Detection ---
 silero-vad==5.1
 
+# --- Web UI (可选) ---
+# bottle                  # 轻量 Web 框架 (Web 管理面板)
+# psutil                  # 可选: 系统资源监控
+
 # --- ASR (Speech-to-Text) ---
 vosk==0.3.45
 # sherpa-onnx>=1.10       # 可选: 新一代本地 ASR (14MB 模型, 替代 Vosk)

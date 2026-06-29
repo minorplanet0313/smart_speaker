@@ -77,6 +77,7 @@ class SmartSpeakerEngine:
         self.tts_fallback: Optional[BaseTTS] = None
         self.conversation_context: Optional[ConversationContext] = None
         self.skill_manager: Optional[SkillManager] = None
+        self.web_server = None
 
         # 运行时状态
         self._running = False
@@ -125,6 +126,7 @@ class SmartSpeakerEngine:
         self._init_tts()
         self._init_skills()
         self._init_conversation_context()
+        self._init_web()
         self._wire_events()
         self._setup_state_timeouts()
 
@@ -328,6 +330,26 @@ class SmartSpeakerEngine:
         self._save_debug_audio_enabled = self.config.get("debug.save_audio", False)
         logger.info(f"对话上下文管理初始化完成: "
                      f"max_rounds={conv_config.get('max_history_rounds', 20)}")
+
+    def _init_web(self) -> None:
+        """初始化 Web 管理面板 (可选)"""
+        web_config = self.config.get("web", {})
+        if not web_config.get("enabled", False):
+            return
+        from src.web.collector import WebEventCollector
+        from src.web.server import WebServer
+        self._web_collector = WebEventCollector(
+            event_bus=self.event_bus,
+            engine=self,
+        )
+        self.web_server = WebServer(
+            collector=self._web_collector,
+            engine=self,
+            host=web_config.get("host", "0.0.0.0"),
+            port=web_config.get("port", 8080),
+        )
+        self.web_server.start()
+        logger.info(f"Web 管理面板: http://{web_config.get('host', '0.0.0.0')}:{web_config.get('port', 8080)}")
 
     # ================================================================
     # 事件连接
@@ -1204,6 +1226,9 @@ class SmartSpeakerEngine:
 
         if self.tts_piper:
             self.tts_piper.release()
+
+        if self.web_server:
+            self.web_server.stop()
 
         for event, handler in self._event_handlers:
             try:

@@ -1,0 +1,289 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>小智音箱 · 控制面板</title>
+<script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.14.x/dist/cdn.min.js"></script>
+<style>
+  :root { --bg:#0f172a; --card:#1e293b; --text:#e2e8f0; --muted:#94a3b8;
+          --green:#22c55e; --blue:#3b82f6; --red:#ef4444; --yellow:#eab308;
+          --purple:#a855f7; --border:#334155; }
+  * { box-sizing:border-box; margin:0; padding:0; }
+  body { font-family:system-ui,-apple-system,sans-serif; background:var(--bg); color:var(--text); min-height:100vh; }
+  .app { max-width:1200px; margin:0 auto; padding:16px; }
+
+  /* Header */
+  .header { display:flex; align-items:center; gap:12px; padding:12px 0; border-bottom:1px solid var(--border); margin-bottom:16px; }
+  .header h1 { font-size:1.2rem; font-weight:600; }
+  .dot { width:10px; height:10px; border-radius:50%; display:inline-block; }
+  .dot.idle{background:var(--green)} .dot.listening{background:var(--blue);animation:pulse .8s infinite}
+  .dot.thinking{background:var(--purple);animation:pulse .5s infinite} .dot.speaking{background:var(--yellow)}
+  .dot.error{background:var(--red)} .dot.muted{background:var(--muted)}
+  @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.3} }
+  .tag { font-size:.75rem; padding:2px 8px; border-radius:12px; background:var(--border); }
+
+  /* Grid */
+  .grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(280px,1fr)); gap:12px; }
+  .card { background:var(--card); border-radius:10px; padding:14px; border:1px solid var(--border); }
+  .card h2 { font-size:.85rem; color:var(--muted); margin-bottom:10px; text-transform:uppercase; letter-spacing:.5px; }
+
+  /* Status */
+  .stat-row { display:flex; justify-content:space-between; padding:4px 0; font-size:.82rem; }
+  .stat-row span:last-child { color:var(--muted); }
+
+  /* Audio meter */
+  .meter { height:6px; background:var(--border); border-radius:3px; overflow:hidden; margin:8px 0; }
+  .meter-bar { height:100%; background:linear-gradient(90deg,var(--green),var(--yellow),var(--red)); border-radius:3px; transition:width .1s; }
+
+  /* Messages */
+  .msg { padding:8px 10px; margin:6px 0; border-radius:8px; font-size:.82rem; line-height:1.4; }
+  .msg.user { background:#1e3a5f; margin-left:24px; }
+  .msg.assistant { background:#1a2e1a; margin-right:24px; }
+  .msg .role { font-size:.7rem; color:var(--muted); margin-bottom:2px; }
+
+  /* Events timeline */
+  .event { font-size:.75rem; padding:3px 0; border-bottom:1px solid var(--border); display:flex; gap:8px; }
+  .event .ts { color:var(--muted); white-space:nowrap; min-width:70px; }
+  .event .type { color:var(--blue); min-width:100px; font-weight:500; }
+  .event .detail { color:var(--muted); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+
+  /* Tabs */
+  .tabs { display:flex; gap:4px; margin-bottom:12px; }
+  .tab { padding:6px 14px; border-radius:6px; font-size:.8rem; cursor:pointer; border:1px solid var(--border); background:transparent; color:var(--muted); }
+  .tab.active { background:var(--blue); color:#fff; border-color:var(--blue); }
+
+  /* Input */
+  .input-row { display:flex; gap:8px; margin-top:8px; }
+  .input-row input { flex:1; padding:8px 12px; border-radius:8px; border:1px solid var(--border); background:var(--bg); color:var(--text); font-size:.85rem; }
+  .input-row button { padding:8px 16px; border-radius:8px; border:none; background:var(--blue); color:#fff; cursor:pointer; font-size:.85rem; font-weight:500; }
+  .input-row button:hover { opacity:.85; }
+
+  /* Config editor */
+  .config-area { width:100%; min-height:200px; background:var(--bg); color:var(--text); border:1px solid var(--border); border-radius:8px; padding:10px; font-family:monospace; font-size:.78rem; resize:vertical; }
+
+  /* Buttons */
+  .btn-sm { padding:4px 12px; border-radius:6px; border:1px solid var(--border); background:var(--card); color:var(--text); cursor:pointer; font-size:.75rem; }
+  .btn-sm:hover { background:var(--border); }
+  .btn-sm.danger { border-color:var(--red); color:var(--red); }
+
+  /* Scrollable */
+  .scroll { max-height:300px; overflow-y:auto; }
+  .scroll::-webkit-scrollbar { width:4px; }
+  .scroll::-webkit-scrollbar-thumb { background:var(--border); border-radius:2px; }
+</style>
+</head>
+<body>
+<div class="app" x-data="dashboard">
+
+  <!-- Header -->
+  <div class="header">
+    <span class="dot" :class="state.state||'idle'"></span>
+    <h1>小智音箱</h1>
+    <span class="tag" x-text="state.state||'idle'"></span>
+    <span style="flex:1"></span>
+    <button class="btn-sm" @click="doWake">唤醒</button>
+    <button class="btn-sm danger" @click="post('/api/config',{web:{enabled:false}})">关闭 Web</button>
+  </div>
+
+  <!-- Grid -->
+  <div class="grid">
+
+    <!-- 状态 -->
+    <div class="card">
+      <h2>系统状态</h2>
+      <div class="stat-row"><span>引擎状态</span><span x-text="state.engine_state||'?'"></span></div>
+      <div class="stat-row"><span>交互次数</span><span x-text="state.total_interactions||0"></span></div>
+      <div class="stat-row"><span>错误次数</span><span x-text="state.error_count||0"></span></div>
+      <div class="stat-row"><span>最后唤醒置信度</span><span x-text="(state.last_wake_confidence||0).toFixed(3)"></span></div>
+      <div class="stat-row"><span>最后 ASR</span><span x-text="(state.last_asr_text||'-').slice(0,20)"></span></div>
+    </div>
+
+    <!-- 音频 -->
+    <div class="card">
+      <h2>音频电平</h2>
+      <div class="meter"><div class="meter-bar" :style="{width:(audioPct*100)+'%'}"></div></div>
+      <div class="stat-row"><span>RMS</span><span x-text="state.audio_rms?.toFixed(4)||'0'"></span></div>
+      <div class="stat-row"><span>采集状态</span><span x-text="sys.capture_running ? '✓' : '✗'"></span></div>
+      <div class="stat-row"><span>播放状态</span><span x-text="sys.player_playing ? '播放中' : '空闲'"></span></div>
+    </div>
+
+    <!-- 系统资源 -->
+    <div class="card">
+      <h2>系统资源</h2>
+      <div class="stat-row"><span>CPU</span><span x-text="(system.cpu_percent||0).toFixed(1)+'%'"></span></div>
+      <div class="meter"><div class="meter-bar" :style="{width:system.cpu_percent+'%'}"></div></div>
+      <div class="stat-row"><span>内存</span><span x-text="(system.memory_used_mb||0)+' / '+(system.memory_total_mb||0)+' MB'"></span></div>
+      <div class="meter"><div class="meter-bar" :style="{width:system.memory_percent+'%'}"></div></div>
+      <div class="stat-row"><span>磁盘可用</span><span x-text="(system.disk_free_gb||0).toFixed(1)+' GB'"></span></div>
+    </div>
+
+  </div>
+
+  <!-- Tabs -->
+  <div class="tabs" style="margin-top:16px">
+    <button class="tab" :class="{active:tab==='chat'}" @click="tab='chat'">对话</button>
+    <button class="tab" :class="{active:tab==='events'}" @click="tab='events'">事件流</button>
+    <button class="tab" :class="{active:tab==='config'}" @click="tab='config'">配置</button>
+  </div>
+
+  <!-- 对话 -->
+  <div class="card" x-show="tab==='chat'">
+    <h2>对话记录</h2>
+    <div class="scroll" x-ref="chatScroll">
+      <template x-for="m in messages">
+        <div class="msg" :class="m.role">
+          <div class="role" x-text="m.role==='user'?'用户':'小智'"></div>
+          <div x-text="m.content"></div>
+        </div>
+      </template>
+      <div x-show="messages.length===0" style="color:var(--muted);font-size:.8rem;">暂无对话</div>
+    </div>
+    <div class="input-row">
+      <input placeholder="输入文字指令..." @keydown.enter="sendText($el)" x-ref="textInput">
+      <button @click="sendText($refs.textInput)">发送</button>
+    </div>
+  </div>
+
+  <!-- 事件流 -->
+  <div class="card" x-show="tab==='events'">
+    <h2>事件流（最近 100 条）</h2>
+    <div class="scroll">
+      <template x-for="e in events">
+        <div class="event">
+          <span class="ts" x-text="fmtTime(e.ts)"></span>
+          <span class="type" x-text="e.event"></span>
+          <span class="detail" x-text="eventDetail(e)"></span>
+        </div>
+      </template>
+    </div>
+  </div>
+
+  <!-- 配置 -->
+  <div class="card" x-show="tab==='config'">
+    <h2>当前配置</h2>
+    <textarea class="config-area" x-model="configText"></textarea>
+    <div class="input-row">
+      <button @click="saveConfig">保存配置</button>
+      <span style="font-size:.75rem;color:var(--muted);align-self:center;" x-text="configMsg"></span>
+    </div>
+  </div>
+
+</div>
+
+<script>
+document.addEventListener('alpine:init', () => {
+  Alpine.data('dashboard', () => ({
+    state: {},
+    events: [],
+    messages: [],
+    system: {},
+    sys: {},
+    tab: 'chat',
+    configText: '',
+    configMsg: '',
+    audioPct: 0,
+
+    async init() {
+      this.loadAll();
+      this.connectSSE();
+      setInterval(() => this.loadAll(), 5000);
+    },
+
+    async loadAll() {
+      try {
+        const [s, h, m, sys] = await Promise.all([
+          fetch('/api/status').then(r=>r.json()),
+          fetch('/api/history?n=100').then(r=>r.json()),
+          fetch('/api/messages?n=30').then(r=>r.json()),
+          fetch('/api/system').then(r=>r.json()),
+        ]);
+        this.state = s || {};
+        this.events = h || [];
+        this.messages = m || [];
+        this.system = sys || {};
+        this.audioPct = Math.min(1, (this.state.audio_rms || 0) / 0.1);
+      } catch(e) { console.error('loadAll:', e); }
+    },
+
+    connectSSE() {
+      const es = new EventSource('/api/events/stream');
+      es.onmessage = (msg) => {
+        const d = JSON.parse(msg.data);
+        if (d.type === 'state') {
+          this.state = d.data;
+          this.system = d.data.system || this.system;
+          this.audioPct = Math.min(1, (this.state.audio_rms || 0) / 0.1);
+        } else if (d.type === 'event') {
+          this.events.unshift(d.data);
+          if (this.events.length > 200) this.events.pop();
+          // 新消息自动刷新对话
+          if (['ASR_RESULT','LLM_RESPONSE'].includes(d.data.event)) {
+            this.refreshMessages();
+          }
+        }
+      };
+      es.onerror = () => { /* 自动重连 */ };
+    },
+
+    async refreshMessages() {
+      try {
+        const m = await fetch('/api/messages?n=30').then(r=>r.json());
+        this.messages = m || [];
+        // 滚动到底部
+        this.$nextTick(() => {
+          const el = this.$refs.chatScroll;
+          if (el) el.scrollTop = el.scrollHeight;
+        });
+      } catch(e) {}
+    },
+
+    async sendText(el) {
+      const text = el.value.trim();
+      if (!text) return;
+      el.value = '';
+      await fetch('/api/text', {
+        method:'POST',
+        headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({text}),
+      });
+    },
+
+    async doWake() {
+      await fetch('/api/wake', { method:'POST' });
+    },
+
+    fmtTime(ts) {
+      const d = new Date((ts||0)*1000);
+      return d.toLocaleTimeString('zh-CN', {hour:'2-digit',minute:'2-digit',second:'2-digit'});
+    },
+
+    eventDetail(e) {
+      const d = e || {};
+      if (d.text) return d.text.slice(0,40);
+      if (d.partial_text) return d.partial_text.slice(0,40);
+      if (d.confidence) return 'conf=' + d.confidence.toFixed(3);
+      if (d.error) return d.error.slice(0,40);
+      if (d.to) return d.from + '→' + d.to;
+      return '';
+    },
+
+    async saveConfig() {
+      try {
+        const updates = JSON.parse(this.configText);
+        const r = await fetch('/api/config', {
+          method:'POST',
+          headers:{'Content-Type':'application/json'},
+          body: JSON.stringify(updates),
+        }).then(r=>r.json());
+        this.configMsg = r.ok ? '✓ 已保存' : '✗ ' + (r.error||'');
+        if (r.ok) setTimeout(() => this.configMsg = '', 3000);
+      } catch(e) {
+        this.configMsg = '✗ JSON 格式错误';
+      }
+    },
+  }));
+});
+</script>
+</body>
+</html>
