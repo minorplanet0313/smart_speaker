@@ -7,6 +7,7 @@
 - 使用 PyAudio 和 soundfile 解码
 """
 
+import queue
 import io
 import threading
 import time
@@ -36,6 +37,10 @@ class AudioPlayer:
         self._is_playing = False
         self._stop_requested = False
         self._lock = threading.Lock()
+        self._stream_queue: Optional[queue.Queue] = None
+        self._stream_thread: Optional[threading.Thread] = None
+        self._stream_format = "wav"
+        self._stream_sample_rate = 22050
 
     def _init_pyaudio(self) -> None:
         """延迟初始化"""
@@ -127,6 +132,117 @@ class AudioPlayer:
         if self._is_playing:
             logger.info("打断音频播放")
             self._stop_requested = True
+        if self._stream_queue is not None:
+            try:
+                self._stream_queue.put_nowait(None)
+            except queue.Full:
+                pass
+
+    def start_stream(self, audio_format: str = "wav", sample_rate: int = 22050) -> None:
+        """开始流式播放会话"""
+        with self._lock:
+            self._stop_requested = False
+            self._is_playing = True
+            self._stream_format = audio_format
+            self._stream_sample_rate = sample_rate
+            self._stream_queue = queue.Queue(maxsize=32)
+            self._stream_thread = threading.Thread(
+                target=self._stream_play_loop,
+                daemon=True,
+                name="audio-stream-player",
+            )
+            self._stream_thread.start()
+
+    def feed_stream_chunk(self, audio_data: bytes) -> None:
+        """向流式播放队列送入音频块"""
+        if self._stream_queue is not None and audio_data:
+            self._stream_queue.put(audio_data)
+
+    def end_stream(self) -> None:
+        """结束流式播放会话"""
+        if self._stream_queue is not None:
+            self._stream_queue.put(None)
+
+    def wait_stream_done(self, timeout: float = 60.0) -> None:
+        """等待流式播放完成"""
+        if self._stream_thread:
+            self._stream_thread.join(timeout=timeout)
+
+    def _stream_play_loop(self) -> None:
+        """从队列读取音频块并连续播放"""
+        try:
+            self._init_pyaudio()
+            stream = None
+            pending = np.array([], dtype=np.float32)
+
+            while not self._stop_requested:
+                try:
+                    chunk = self._stream_queue.get(timeout=0.1)
+                except queue.Empty:
+                    continue
+                if chunk is None:
+                    break
+
+                if self._stream_format == "pcm":
+                    samples = (
+                        np.frombuffer(chunk, dtype=np.int16).astype(np.float32) / 32768.0
+                    )
+                    sr = self._stream_sample_rate
+                else:
+                    samples, sr = self._decode(chunk, self._stream_format)
+
+                if sr != 16000:
+                    samples = self._resample(samples, sr, 16000)
+                    sr = 16000
+                if samples.ndim > 1:
+                    samples = samples.mean(axis=1)
+
+                pending = np.concatenate([pending, samples]) if len(pending) else samples
+
+                if stream is None and len(pending) > 0:
+                    stream = self._pa.open(
+                        format=self._pyaudio.paInt16,
+                        channels=1,
+                        rate=sr,
+                        output=True,
+                        output_device_index=self._find_output_device(),
+                    )
+
+                chunk_size = 1024
+                while stream and len(pending) >= chunk_size:
+                    if self._stop_requested:
+                        break
+                    block = pending[:chunk_size]
+                    pending = pending[chunk_size:]
+                    int16 = (np.clip(block, -1.0, 1.0) * 32767).astype(np.int16)
+                    stream.write(int16.tobytes())
+
+            if stream and len(pending) > 0 and not self._stop_requested:
+                int16 = (np.clip(pending, -1.0, 1.0) * 32767).astype(np.int16)
+                stream.write(int16.tobytes())
+
+            if stream:
+                stream.stop_stream()
+                stream.close()
+        except Exception as e:
+            logger.error(f"流式播放失败: {e}")
+        finally:
+            with self._lock:
+                self._is_playing = False
+                self._stop_requested = False
+                self._stream_queue = None
+                self._stream_thread = None
+
+    def release(self) -> None:
+        """释放 PyAudio 资源"""
+        self.stop()
+        if self._pa:
+            try:
+                self._pa.terminate()
+            except Exception:
+                pass
+            self._pa = None
+            self._pyaudio = None
 
     def wait_until_done(self, timeout: float = None) -> None:
         """等待播放完成"""

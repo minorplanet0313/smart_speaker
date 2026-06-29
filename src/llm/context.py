@@ -7,6 +7,7 @@
 - 支持多会话 (不同用户/会话ID)
 """
 
+import threading
 import time
 import uuid
 from dataclasses import dataclass, field
@@ -75,49 +76,59 @@ class ConversationContext:
 
         self._conversations: Dict[str, Conversation] = {}
         self._current_conversation_id: Optional[str] = None
+        self._lock = threading.RLock()
 
     @property
     def current_conversation_id(self) -> str:
         """获取或创建当前会话 ID"""
-        if self._current_conversation_id is None:
-            self.new_conversation()
-        return self._current_conversation_id
+        with self._lock:
+            if self._current_conversation_id is None:
+                self.new_conversation()
+            return self._current_conversation_id
 
     def new_conversation(self) -> str:
         """创建新会话"""
-        conv_id = uuid.uuid4().hex[:12]
-        self._conversations[conv_id] = Conversation(id=conv_id)
-        self._current_conversation_id = conv_id
-        self._cleanup_expired()
-        logger.debug(f"新建会话: {conv_id}")
-        return conv_id
+        with self._lock:
+            conv_id = uuid.uuid4().hex[:12]
+            self._conversations[conv_id] = Conversation(id=conv_id)
+            self._current_conversation_id = conv_id
+            self._cleanup_expired()
+            logger.debug(f"新建会话: {conv_id}")
+            return conv_id
 
     def add_user_message(self, text: str, conversation_id: str = None) -> None:
         """添加用户消息"""
-        conv = self._get_conversation(conversation_id)
-        conv.add_user_message(text)
+        with self._lock:
+            conv = self._get_conversation(conversation_id)
+            conv.add_user_message(text)
 
     def add_assistant_message(self, text: str, conversation_id: str = None) -> None:
         """添加助手消息"""
-        conv = self._get_conversation(conversation_id)
-        conv.add_assistant_message(text)
-        self._trim_if_needed(conv)
+        with self._lock:
+            conv = self._get_conversation(conversation_id)
+            conv.add_assistant_message(text)
+            self._trim_if_needed(conv)
 
     def get_messages(self, conversation_id: str = None) -> List[Dict[str, str]]:
         """获取对话历史"""
-        conv = self._get_conversation(conversation_id)
-        return conv.get_messages(self.system_prompt)
+        with self._lock:
+            conv = self._get_conversation(conversation_id)
+            return conv.get_messages(self.system_prompt)
 
     def clear(self, conversation_id: str = None) -> None:
         """清除会话历史"""
-        conv_id = conversation_id or self.current_conversation_id
-        if conv_id in self._conversations:
-            self._conversations[conv_id].messages.clear()
-            logger.debug(f"清除会话: {conv_id}")
+        with self._lock:
+            conv_id = conversation_id or self.current_conversation_id
+            if conv_id in self._conversations:
+                self._conversations[conv_id].messages.clear()
+                logger.debug(f"清除会话: {conv_id}")
 
     def _get_conversation(self, conversation_id: str = None) -> Conversation:
-        """获取会话 (不存在则创建)"""
-        conv_id = conversation_id or self.current_conversation_id
+        """获取会话 (不存在则创建) — 调用方需持有锁"""
+        conv_id = conversation_id or self._current_conversation_id
+        if conv_id is None:
+            conv_id = uuid.uuid4().hex[:12]
+            self._current_conversation_id = conv_id
         if conv_id not in self._conversations:
             self._conversations[conv_id] = Conversation(id=conv_id)
         return self._conversations[conv_id]
@@ -147,5 +158,6 @@ class ConversationContext:
     @property
     def active_conversations(self) -> int:
         """活跃会话数量"""
-        self._cleanup_expired()
-        return len(self._conversations)
+        with self._lock:
+            self._cleanup_expired()
+            return len(self._conversations)

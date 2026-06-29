@@ -37,9 +37,6 @@ class TimeSkill(BaseSkill):
     priority = SkillPriority.HIGH  # 高优先级, 精确匹配
     require_network = False
 
-    def can_handle(self, text: str) -> bool:
-        return any(kw in text for kw in self.keywords)
-
     def execute(
         self,
         text: str,

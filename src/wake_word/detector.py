@@ -20,6 +20,7 @@ from typing import Callable, Optional
 
 import numpy as np
 
+from src.audio.ring_buffer import AudioRingBuffer
 from src.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -59,16 +60,20 @@ class WakeWordDetector:
 
         # 内部状态
         self._model = None
+        self._model_loaded = False
         self._callbacks: list[Callable[[float], None]] = []
-        self._audio_buffer = np.array([], dtype=np.float32)
+        self._audio_buffer = AudioRingBuffer(max_samples=16000)
         self._samples_per_chunk = int(16000 * chunk_duration_ms / 1000)
         self._last_trigger_time = 0.0
 
-        # 自检
-        self._init_model()
+        # 模型路径存在性检查 (延迟加载)
+        self._model_path_valid = bool(model_path)
 
-    def _init_model(self) -> None:
-        """初始化 openWakeWord 模型"""
+    def _lazy_load_model(self) -> None:
+        """延迟加载 openWakeWord 模型"""
+        if self._model_loaded:
+            return
+        self._model_loaded = True
         try:
             from openwakeword import Model
 
@@ -116,8 +121,12 @@ class WakeWordDetector:
         if self._model is None:
             return 0.0
 
+        self._lazy_load_model()
+        if self._model is None:
+            return 0.0
+
         # 累积音频缓冲
-        self._audio_buffer = np.append(self._audio_buffer, audio_frame)
+        self._audio_buffer.append(audio_frame)
 
         # 每约 2 秒打印一次音频能量 (调试用)
         if logger.isEnabledFor(10):  # DEBUG level
@@ -131,9 +140,9 @@ class WakeWordDetector:
 
         # 等累积到足够的样本数再做推理
         if len(self._audio_buffer) >= self._samples_per_chunk:
-            # 取出一个 chunk
-            chunk = self._audio_buffer[:self._samples_per_chunk]
-            self._audio_buffer = self._audio_buffer[self._samples_per_chunk:]
+            chunk = self._audio_buffer.consume(self._samples_per_chunk)
+            if chunk is None:
+                return 0.0
 
             try:
                 # openWakeWord 推理
@@ -195,5 +204,13 @@ class WakeWordDetector:
 
     @property
     def is_available(self) -> bool:
-        """检查唤醒词检测是否可用"""
+        """检查唤醒词检测是否可用 (模型可延迟加载)"""
+        if not self.model_path:
+            return False
+        self._lazy_load_model()
         return self._model is not None
+
+    def release(self) -> None:
+        """释放模型资源"""
+        self._model = None
+        self._audio_buffer.clear()

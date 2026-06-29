@@ -68,12 +68,15 @@ class StateMachine:
 
     @property
     def current_state(self) -> State:
-        return self._state
+        with self._lock:
+            return self._state
 
     @property
     def state_duration_ms(self) -> float:
         """当前状态的持续时间 (毫秒)"""
-        enter_time = self._state_enter_time.get(self._state, time.time())
+        with self._lock:
+            state = self._state
+            enter_time = self._state_enter_time.get(state, time.time())
         return (time.time() - enter_time) * 1000
 
     def transition(self, to_state: State) -> bool:
@@ -97,13 +100,16 @@ class StateMachine:
                 )
                 return False
 
-            # 执行转换
+            duration_ms = (
+                time.time() - self._state_enter_time.get(from_state, time.time())
+            ) * 1000
+
             self._state = to_state
             self._state_enter_time[to_state] = time.time()
 
             logger.info(
                 f"状态转换: {from_state.value} → {to_state.value} "
-                f"(在 {from_state.value} 中停留了 {self.state_duration_ms:.0f}ms)"
+                f"(在 {from_state.value} 中停留了 {duration_ms:.0f}ms)"
             )
 
         # 通过 EventBus 通知
@@ -125,12 +131,14 @@ class StateMachine:
 
     def can_transition(self, to_state: State) -> bool:
         """检查是否允许转换到目标状态"""
-        allowed = STATE_TRANSITIONS.get(self._state, set())
-        return to_state in allowed
+        with self._lock:
+            allowed = STATE_TRANSITIONS.get(self._state, set())
+            return to_state in allowed
 
     def is_in(self, *states: State) -> bool:
         """检查当前是否在指定状态中"""
-        return self._state in states
+        with self._lock:
+            return self._state in states
 
     def on_change(self, callback: Callable[[State, State], None]) -> None:
         """注册状态变更回调"""
@@ -147,21 +155,27 @@ class StateMachine:
 
     def check_timeouts(self) -> None:
         """检查并触发超时回调 (由 Engine 主循环调用)"""
-        for state, (timeout_ms, callback) in list(self._timeout_callbacks.items()):
-            if self._state == state:
-                enter_time = self._state_enter_time.get(state, time.time())
-                elapsed_ms = (time.time() - enter_time) * 1000
-                if elapsed_ms > timeout_ms:
-                    logger.warning(
-                        f"状态超时: {state.value}, "
-                        f"elapsed={elapsed_ms:.0f}ms > timeout={timeout_ms:.0f}ms"
-                    )
-                    try:
-                        callback()
-                    except Exception as e:
-                        logger.error(f"超时回调异常: {e}")
-                    # 移除一次性超时
-                    self._timeout_callbacks.pop(state, None)
+        with self._lock:
+            current = self._state
+            callbacks_to_run = []
+            for state, (timeout_ms, callback) in self._timeout_callbacks.items():
+                if current == state:
+                    enter_time = self._state_enter_time.get(state, time.time())
+                    elapsed_ms = (time.time() - enter_time) * 1000
+                    if elapsed_ms > timeout_ms:
+                        logger.warning(
+                            f"状态超时: {state.value}, "
+                            f"elapsed={elapsed_ms:.0f}ms > timeout={timeout_ms:.0f}ms"
+                        )
+                        callbacks_to_run.append(callback)
+                        # 重置计时器，保留超时配置供下次进入该状态时复用
+                        self._state_enter_time[state] = time.time()
+
+        for callback in callbacks_to_run:
+            try:
+                callback()
+            except Exception as e:
+                logger.error(f"超时回调异常: {e}")
 
     def force_idle(self) -> None:
         """

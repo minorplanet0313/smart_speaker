@@ -36,11 +36,13 @@ class AudioCapture:
         channels: int = 1,
         chunk_size: int = 1024,
         device_name: Optional[str] = None,
+        on_error: Optional[Callable[[str], None]] = None,
     ):
         self.sample_rate = sample_rate
         self.channels = channels
         self.chunk_size = chunk_size
         self.device_name = device_name
+        self._on_error = on_error
 
         self._pyaudio = None
         self._stream = None
@@ -123,6 +125,8 @@ class AudioCapture:
 
             except OSError as e:
                 logger.error(f"音频读取错误: {e}")
+                if self._on_error:
+                    self._on_error(str(e))
                 if self._is_running:
                     logger.info("尝试重新连接音频设备...")
                     time.sleep(1)
@@ -144,6 +148,15 @@ class AudioCapture:
                 self._stream.close()
             except Exception:
                 pass
+            self._stream = None
+
+        if self._pa:
+            try:
+                self._pa.terminate()
+            except Exception:
+                pass
+            self._pa = None
+
         self._init_pyaudio()
         logger.info("音频设备已重新连接")
 
@@ -169,6 +182,8 @@ class AudioCapture:
                 self._pa.terminate()
             except Exception:
                 pass
+            self._pa = None
+            self._pyaudio = None
 
         logger.info("音频捕获已停止")
 

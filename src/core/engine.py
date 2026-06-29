@@ -8,6 +8,7 @@
 4. 异常处理和优雅关闭
 """
 
+import queue
 import signal
 import sys
 import threading
@@ -22,20 +23,22 @@ from src.audio.capture import AudioCapture
 from src.audio.player import AudioPlayer
 from src.audio.vad import VADState, VoiceActivityDetector
 from src.wake_word.detector import WakeWordDetector
-from src.asr.base import ASRResult
 from src.asr.vosk_asr import VoskASR
 from src.asr.cloud_asr import CloudASR
-from src.audio.preprocessing import PreprocessConfig, preprocess_pipeline
+from src.audio.preprocessing import preprocess_pipeline
 from src.llm.deepseek import DeepSeekLLM
 from src.llm.context import ConversationContext
 from src.tts.edge_tts import EdgeTTS
 from src.tts.piper_tts import PiperTTS
+from src.tts.base import BaseTTS
 from src.skills.base import SkillContext, SkillResult
 from src.skills.skill_manager import SkillManager
 from src.skills.builtin.chat_skill import ChatSkill
 from src.skills.builtin.time_skill import TimeSkill
 from src.utils.config import Config, get_config
 from src.utils.logger import get_logger, setup_logger
+from src.utils.messages import ERROR_GENERIC, ERROR_NOT_UNDERSTOOD
+from src.utils.sentence_split import extract_complete_sentences
 
 logger = get_logger(__name__)
 
@@ -70,17 +73,35 @@ class SmartSpeakerEngine:
         self.llm: Optional[DeepSeekLLM] = None
         self.tts_edge: Optional[EdgeTTS] = None
         self.tts_piper: Optional[PiperTTS] = None
+        self.tts_primary: Optional[BaseTTS] = None
+        self.tts_fallback: Optional[BaseTTS] = None
         self.conversation_context: Optional[ConversationContext] = None
         self.skill_manager: Optional[SkillManager] = None
 
         # 运行时状态
         self._running = False
-        self._audio_buffer = bytearray()
-        self._speech_audio_buffer: list = []  # 当前语音片段的音频块
+        self._speech_lock = threading.Lock()
+        self._speech_audio_buffer: list = []
         self._wake_word_cooldown_until = 0.0
-        self._asr_incremental_mode = True  # 边听边识别模式 (降低感知延迟)
-        self._asr_preprocess = True        # 音频预处理 (提升识别准确率)
-        self._asr_final_text = ""  # 增量 ASR 累积的最终文本
+        self._asr_incremental_mode = True
+        self._asr_preprocess = True
+        self._asr_final_text = ""
+        self._save_debug_audio_enabled = False
+        self._llm_stream_enabled = False
+        self._streaming_tts_active = False
+        self._stream_playback_started = False
+
+        # 音频 offload 队列 + worker
+        buffer_seconds = self.config.get("performance.audio_buffer_seconds", 0.5)
+        sample_rate = self.config.get("audio.sample_rate", 16000)
+        chunk_size = self.config.get("audio.chunk_size", 1024)
+        max_queue = max(4, int(buffer_seconds * sample_rate / chunk_size))
+        self._audio_queue: queue.Queue = queue.Queue(maxsize=max_queue)
+        self._audio_worker: Optional[threading.Thread] = None
+        self._audio_worker_running = False
+
+        # 事件处理器引用 (用于 stop 时取消订阅)
+        self._event_handlers: list = []
 
         # 注册信号处理
         signal.signal(signal.SIGINT, self._signal_handler)
@@ -117,6 +138,9 @@ class SmartSpeakerEngine:
             channels=self.config.get("audio.channels", 1),
             chunk_size=self.config.get("audio.chunk_size", 1024),
             device_name=self.config.get("audio.device.microphone"),
+            on_error=lambda msg: self.event_bus.publish(
+                Event.AUDIO_DEVICE_ERROR, source="audio_capture", error=msg
+            ),
         )
         self.audio_player = AudioPlayer(
             device_name=self.config.get("audio.device.speaker"),
@@ -222,6 +246,8 @@ class SmartSpeakerEngine:
     def _init_llm(self) -> None:
         """初始化大语言模型"""
         llm_config = self.config.get("llm", {})
+        retry_config = llm_config.get("retry", {})
+        self._llm_stream_enabled = llm_config.get("stream", False)
         self.llm = DeepSeekLLM(
             api_key=llm_config.get("api_key", ""),
             model=llm_config.get("model", "deepseek-chat"),
@@ -230,8 +256,13 @@ class SmartSpeakerEngine:
             temperature=llm_config.get("temperature", 0.7),
             max_tokens=llm_config.get("max_tokens", 1024),
             timeout=llm_config.get("timeout_seconds", 30),
+            max_retries=retry_config.get("max_retries", 3),
+            backoff_base=retry_config.get("backoff_base", 2),
         )
-        logger.info(f"LLM (DeepSeek) 初始化完成: model={llm_config.get('model')}")
+        logger.info(
+            f"LLM (DeepSeek) 初始化完成: model={llm_config.get('model')}, "
+            f"stream={'✓' if self._llm_stream_enabled else '✗'}"
+        )
 
     def _init_tts(self) -> None:
         """初始化语音合成"""
@@ -255,19 +286,35 @@ class SmartSpeakerEngine:
         else:
             logger.info("TTS (Piper) 未配置, 仅使用在线 TTS")
 
+        primary = tts_config.get("primary", "edge")
+        fallback = tts_config.get("fallback", "piper")
+        self.tts_primary = self.tts_edge if primary == "edge" else self.tts_piper
+        self.tts_fallback = self.tts_piper if fallback == "piper" else self.tts_edge
+        logger.info(f"TTS 主引擎: {primary}, 降级: {fallback}")
+
     def _init_skills(self) -> None:
         """初始化技能管理器"""
         self.skill_manager = SkillManager()
-        # 注册内置技能
-        self.skill_manager.register(ChatSkill(self.llm))
-        self.skill_manager.register(TimeSkill())
-        # 天气技能需要 API key
-        weather_api_key = self.config.get("skills.weather.api_key", "")
-        if weather_api_key:
+        skills_config = self.config.get("skills", {})
+        builtin_enabled = skills_config.get(
+            "builtin_enabled", ["chat", "time", "weather"]
+        )
+
+        if "chat" in builtin_enabled:
+            self.skill_manager.register(ChatSkill(self.llm))
+        if "time" in builtin_enabled:
+            self.skill_manager.register(TimeSkill())
+
+        weather_api_key = skills_config.get("weather", {}).get("api_key", "")
+        if "weather" in builtin_enabled and weather_api_key:
             from src.skills.builtin.weather_skill import WeatherSkill
-            self.skill_manager.register(WeatherSkill(weather_api_key))
-        logger.info(f"技能管理器初始化完成: "
-                     f"{len(self.skill_manager.list_skills())} 个技能已注册")
+            default_city = skills_config.get("weather", {}).get("city", "auto")
+            self.skill_manager.register(WeatherSkill(weather_api_key, default_city))
+
+        logger.info(
+            f"技能管理器初始化完成: "
+            f"{len(self.skill_manager.list_skills())} 个技能已注册"
+        )
 
     def _init_conversation_context(self) -> None:
         """初始化对话上下文管理"""
@@ -275,7 +322,10 @@ class SmartSpeakerEngine:
         self.conversation_context = ConversationContext(
             max_history_rounds=conv_config.get("max_history_rounds", 20),
             context_timeout_seconds=conv_config.get("context_timeout_seconds", 300),
+            system_prompt=conv_config.get("system_prompt", ""),
         )
+
+        self._save_debug_audio_enabled = self.config.get("debug.save_audio", False)
         logger.info(f"对话上下文管理初始化完成: "
                      f"max_rounds={conv_config.get('max_history_rounds', 20)}")
 
@@ -287,42 +337,30 @@ class SmartSpeakerEngine:
         """连接模块间的事件"""
         logger.info("连接事件总线...")
 
-        # 音频帧 → 唤醒词检测 + VAD
-        self.event_bus.subscribe(Event.AUDIO_FRAME, self._on_audio_frame)
-
-        # 唤醒词 → 开始监听
-        if self.wake_word_detector:
-            self.wake_word_detector.on_detected(self._on_wake_word_detected)
-
-        # 语音结束 → ASR
-        self.event_bus.subscribe(Event.SPEECH_END, self._on_speech_end)
-
-        # ASR 结果 → 技能处理 → LLM
-        self.event_bus.subscribe(Event.ASR_RESULT, self._on_asr_result)
-        self.event_bus.subscribe(Event.ASR_PARTIAL, self._on_asr_partial)
-
-        # LLM 流式输出
-        self.event_bus.subscribe(Event.LLM_STREAM_CHUNK, self._on_llm_stream_chunk)
-
-        # LLM 完成 → TTS
-        self.event_bus.subscribe(Event.LLM_RESPONSE, self._on_llm_response)
-
-        # TTS 就绪 → 播放
-        self.event_bus.subscribe(Event.TTS_AUDIO_READY, self._on_tts_audio_ready)
-
-        # 播放完成 → 回到 IDLE
-        self.event_bus.subscribe(Event.PLAYBACK_DONE, self._on_playback_done)
-
-        # 各类错误
-        self.event_bus.subscribe(Event.ASR_ERROR, self._on_error)
-        self.event_bus.subscribe(Event.LLM_ERROR, self._on_error)
-        self.event_bus.subscribe(Event.TTS_ERROR, self._on_error)
-        self.event_bus.subscribe(Event.AUDIO_DEVICE_ERROR, self._on_error)
-
-        # 关闭信号
-        self.event_bus.subscribe(Event.SHUTDOWN, self._on_shutdown)
+        handlers = [
+            (Event.SPEECH_END, self._on_speech_end),
+            (Event.ASR_RESULT, self._on_asr_result),
+            (Event.ASR_PARTIAL, self._on_asr_partial),
+            (Event.LLM_STREAM_CHUNK, self._on_llm_stream_chunk),
+            (Event.LLM_RESPONSE, self._on_llm_response),
+            (Event.TTS_AUDIO_READY, self._on_tts_audio_ready),
+            (Event.TTS_STREAM_CHUNK, self._on_tts_stream_chunk),
+            (Event.PLAYBACK_DONE, self._on_playback_done),
+            (Event.ASR_ERROR, self._on_error),
+            (Event.LLM_ERROR, self._on_error),
+            (Event.TTS_ERROR, self._on_error),
+            (Event.AUDIO_DEVICE_ERROR, self._on_error),
+            (Event.ERROR, self._on_error),
+            (Event.SHUTDOWN, self._on_shutdown),
+        ]
+        for event, handler in handlers:
+            self.event_bus.subscribe(event, handler)
+            self._event_handlers.append((event, handler))
 
         logger.info("事件连接完成")
+
+        if self.wake_word_detector:
+            self.wake_word_detector.on_detected(self._on_wake_word_detected)
 
     def _setup_state_timeouts(self) -> None:
         """设置状态超时保护"""
@@ -354,20 +392,55 @@ class SmartSpeakerEngine:
     # 事件处理器
     # ================================================================
 
-    def _on_audio_frame(self, event_data) -> None:
-        """处理音频帧: 路由到唤醒词检测器 (IDLE时) 或 VAD (LISTENING时)"""
-        audio_frame = event_data.get("frame")
-        if audio_frame is None:
-            return
+    # ================================================================
+    # 音频 offload worker
+    # ================================================================
 
+    def _start_audio_worker(self) -> None:
+        """启动音频处理 worker 线程"""
+        if self._audio_worker_running:
+            return
+        self._audio_worker_running = True
+        self._audio_worker = threading.Thread(
+            target=self._audio_worker_loop,
+            daemon=True,
+            name="audio-worker",
+        )
+        self._audio_worker.start()
+
+    def _stop_audio_worker(self) -> None:
+        """停止音频 worker"""
+        self._audio_worker_running = False
+        try:
+            self._audio_queue.put_nowait(None)
+        except queue.Full:
+            pass
+        if self._audio_worker:
+            self._audio_worker.join(timeout=2)
+            self._audio_worker = None
+
+    def _audio_worker_loop(self) -> None:
+        """从队列取帧并处理唤醒/VAD/ASR feed"""
+        while self._audio_worker_running:
+            try:
+                frame = self._audio_queue.get(timeout=0.2)
+            except queue.Empty:
+                continue
+            if frame is None:
+                break
+            try:
+                self._process_audio_frame(frame)
+            except Exception as e:
+                logger.error(f"音频帧处理异常: {e}", exc_info=True)
+
+    def _process_audio_frame(self, audio_frame: np.ndarray) -> None:
+        """处理音频帧: 路由到唤醒词检测器 (IDLE) 或 VAD (LISTENING)"""
         current_state = self.state_machine.current_state
 
         if current_state == State.IDLE and self.wake_word_detector:
-            # 检查冷却时间
             now = time.time()
             if now < self._wake_word_cooldown_until:
                 return
-            # 每 ~5 秒打印音频电平 (确认麦克风在工作)
             if not hasattr(self, '_audio_level_debug_time'):
                 self._audio_level_debug_time = 0.0
                 self._audio_level_samples = 0
@@ -386,27 +459,52 @@ class SmartSpeakerEngine:
                 self._audio_level_debug_time = now
                 self._audio_level_samples = 0
                 self._audio_level_rms_sum = 0.0
-            # 喂给唤醒词检测器
             self.wake_word_detector.detect(audio_frame)
 
         elif current_state == State.LISTENING:
-            # 累积音频缓冲 (用于保存调试录音和后备 ASR)
-            self._speech_audio_buffer.append(audio_frame)
-            # 增量 ASR: 边听边识别, 逐帧送入 Vosk
+            keep_buffer = (
+                self._save_debug_audio_enabled
+                or not self._asr_incremental_mode
+            )
+            if keep_buffer:
+                with self._speech_lock:
+                    self._speech_audio_buffer.append(audio_frame.copy())
+
             if self._asr_incremental_mode and self.asr and self.asr.is_available:
                 try:
-                    accepted = self.asr.feed_chunk(audio_frame)
+                    def on_partial(partial_text: str):
+                        self.event_bus.publish(
+                            Event.ASR_PARTIAL,
+                            source="asr",
+                            partial_text=partial_text,
+                        )
+
+                    accepted = self.asr.feed_chunk(
+                        audio_frame, partial_callback=on_partial
+                    )
                     if accepted:
-                        self._asr_final_text += accepted
-                except Exception:
-                    pass  # 增量送入失败不影响主流程
-            # VAD 处理
+                        with self._speech_lock:
+                            self._asr_final_text += accepted
+                except Exception as e:
+                    logger.warning(f"增量 ASR feed 失败: {e}")
+
             if self.vad:
                 vad_state = self.vad.process(audio_frame)
                 if vad_state == VADState.SPEECH_START:
                     self.event_bus.publish(Event.SPEECH_START, source="vad")
                 elif vad_state == VADState.SPEECH_END:
                     self.event_bus.publish(Event.SPEECH_END, source="vad")
+
+    def _begin_utterance(self) -> None:
+        """开始新一轮语音采集 (唤醒词/键盘唤醒共用)"""
+        with self._speech_lock:
+            self._speech_audio_buffer = []
+            self._asr_final_text = ""
+        if self._asr_incremental_mode and self.asr and self.asr.is_available:
+            try:
+                self.asr.begin_utterance()
+            except Exception as e:
+                logger.warning(f"增量 ASR 初始化失败: {e}")
 
     def _on_wake_word_detected(self, confidence: float) -> None:
         """唤醒词检测到: 切换到 LISTENING 状态"""
@@ -422,16 +520,8 @@ class SmartSpeakerEngine:
             self.audio_player.stop()
             self.event_bus.publish(Event.PLAYBACK_INTERRUPTED, source="engine")
 
-        # 清空之前的语音缓冲
-        self._speech_audio_buffer = []
-
-        # 增量 ASR 模式: 提前创建识别器, 边听边识别
-        self._asr_final_text = ""
-        if self._asr_incremental_mode and self.asr and self.asr.is_available:
-            try:
-                self.asr.begin_utterance()
-            except Exception as e:
-                logger.warning(f"增量 ASR 初始化失败: {e}")
+        # 清空之前的语音缓冲并初始化增量 ASR
+        self._begin_utterance()
 
         # 切换到 LISTENING
         if self.state_machine.transition(State.LISTENING):
@@ -442,48 +532,54 @@ class SmartSpeakerEngine:
             )
 
     def _on_speech_end(self, event_data) -> None:
-        """语音结束: 切换到 THINKING, 触发 ASR (含音频预处理)"""
+        """语音结束: 轻量切换状态，预处理与 ASR 在 worker 线程执行"""
         if not self.state_machine.is_in(State.LISTENING):
             return
 
-        logger.info(f"语音结束, 累积了 {len(self._speech_audio_buffer)} 个音频块")
+        with self._speech_lock:
+            buffer_len = len(self._speech_audio_buffer)
+            if buffer_len == 0 and not (
+                self._asr_incremental_mode and self.asr and self.asr.is_available
+            ):
+                logger.info("语音缓冲为空, 回到 IDLE")
+                self.state_machine.transition(State.IDLE)
+                return
+            audio_chunks = list(self._speech_audio_buffer)
+            self._speech_audio_buffer = []
 
-        # 检查是否有足够的语音
-        if not self._speech_audio_buffer:
-            logger.info("语音缓冲为空, 回到 IDLE")
+        logger.info(f"语音结束, 累积了 {buffer_len} 个音频块")
+        self.state_machine.transition(State.THINKING)
+
+        threading.Thread(
+            target=self._run_asr_pipeline,
+            args=(audio_chunks,),
+            daemon=True,
+            name="asr-thread",
+        ).start()
+
+    def _run_asr_pipeline(self, audio_chunks: list) -> None:
+        """ASR 管线: 合并音频、预处理、识别 (在独立线程中)"""
+        sample_rate = self.config.get("audio.sample_rate", 16000)
+
+        if audio_chunks:
+            audio_data = np.concatenate(audio_chunks)
+        elif self._asr_incremental_mode:
+            audio_data = np.array([], dtype=np.float32)
+        else:
+            logger.info("无音频数据, 回到 IDLE")
             self.state_machine.transition(State.IDLE)
             return
 
-        self.state_machine.transition(State.THINKING)
+        if self._asr_preprocess and len(audio_data) > 0:
+            audio_data = preprocess_pipeline(audio_data, sample_rate=sample_rate)
 
-        # 合并音频数据
-        audio_data = np.concatenate(self._speech_audio_buffer)
-        self._speech_audio_buffer = []
+        if self._save_debug_audio_enabled and len(audio_data) > 0:
+            self._save_debug_audio(audio_data)
 
-        # 音频预处理: 去直流 + 高通滤波 + 峰值归一化 (提升 ASR 准确率)
-        if self._asr_preprocess:
-            audio_data = preprocess_pipeline(audio_data, sample_rate=16000)
-
-        # 保存录制音频到文件 (调试用)
-        self._save_debug_audio(audio_data)
-
-        # 选择 ASR 模式: 增量模式 (边听边识别) 或 批量模式
         if self._asr_incremental_mode and self.asr and self.asr.is_available:
-            # 增量模式: 音频已逐帧送入, 直接获取最终结果
-            threading.Thread(
-                target=self._do_asr_finalize,
-                args=(audio_data,),
-                daemon=True,
-                name="asr-thread",
-            ).start()
+            self._do_asr_finalize(audio_data)
         else:
-            # 批量模式: 一次性送入全部音频
-            threading.Thread(
-                target=self._do_asr,
-                args=(audio_data,),
-                daemon=True,
-                name="asr-thread",
-            ).start()
+            self._do_asr(audio_data)
 
     def _do_asr(self, audio_data: np.ndarray) -> None:
         """执行语音识别 (在独立线程中, 支持流式部分结果, 失败时降级到云端)"""
@@ -550,39 +646,35 @@ class SmartSpeakerEngine:
                 Event.ASR_ERROR, source="asr_cloud", error=str(e2)
             )
 
-    def _on_asr_result(self, event_data) -> None:
-        """ASR 结果: 通过技能管理器处理"""
-        text = event_data.get("text", "").strip()
-
-        if not text:
-            # 空结果, 回到 IDLE (播放提示音)
-            logger.info("ASR 返回空文本, 回到 IDLE")
-            self.state_machine.transition(State.IDLE)
-            return
-
-        # 通过技能管理器找到合适的技能
+    def _handle_user_text(self, text: str) -> None:
+        """统一处理用户文本 (ASR 结果 / 键盘输入)"""
         context = SkillContext(
             conversation_id=self.conversation_context.current_conversation_id,
         )
         result = self.skill_manager.execute(text, context)
 
-        # 技能返回的响应文本
         if result and result.success and result.response_text:
-            # 技能直接返回文本, 不需要 LLM
-            response_text = result.response_text
-            logger.info(f"技能直接响应: \"{response_text}\"")
-            self._do_tts(response_text)
+            logger.info(f"技能直接响应: \"{result.response_text}\"")
+            self._do_tts(result.response_text)
         elif result and not result.success:
-            # 技能失败, 使用错误提示
             logger.error(f"技能执行失败: {result.error_message}")
-            self._do_tts("抱歉, 出了点问题, 请再试一次")
+            self._do_tts(ERROR_GENERIC)
         elif result and result.success and result.needs_llm:
-            # ChatSkill 兜底: 需要 LLM 处理
             self._do_llm(text)
         else:
-            # 无法处理
             logger.warning(f"未找到合适的技能处理: \"{text}\"")
-            self._do_tts("抱歉, 我不太明白你的意思")
+            self._do_tts(ERROR_NOT_UNDERSTOOD)
+
+    def _on_asr_result(self, event_data) -> None:
+        """ASR 结果: 通过技能管理器处理"""
+        text = event_data.get("text", "").strip()
+
+        if not text:
+            logger.info("ASR 返回空文本, 回到 IDLE")
+            self.state_machine.transition(State.IDLE)
+            return
+
+        self._handle_user_text(text)
 
     def _do_asr_finalize(self, audio_data: np.ndarray) -> None:
         """
@@ -593,8 +685,8 @@ class SmartSpeakerEngine:
         start_time = time.time()
         try:
             final_text = self.asr.end_utterance()
-            # 合并增量模式中 AcceptWaveform 累积的文本
-            combined = (self._asr_final_text + final_text).strip()
+            with self._speech_lock:
+                combined = (self._asr_final_text + final_text).strip()
             latency_ms = (time.time() - start_time) * 1000
 
             if combined:
@@ -632,7 +724,10 @@ class SmartSpeakerEngine:
         # 注意: 完整的响应由 LLM_RESPONSE 事件携带
 
     def _on_llm_response(self, event_data) -> None:
-        """LLM 完成响应: 触发 TTS"""
+        """LLM 完成响应: 非流式模式下触发 TTS"""
+        if event_data.get("streamed"):
+            return
+
         text = event_data.get("text", "").strip()
         if not text:
             logger.warning("LLM 返回空文本")
@@ -643,7 +738,9 @@ class SmartSpeakerEngine:
         self._do_tts(text)
 
     def _save_debug_audio(self, audio_data: np.ndarray) -> None:
-        """保存录制音频到文件 (调试用)"""
+        """保存录制音频到文件 (调试用, 需 debug.save_audio=true)"""
+        if not self._save_debug_audio_enabled:
+            return
         try:
             import wave
             from pathlib import Path
@@ -676,14 +773,15 @@ class SmartSpeakerEngine:
     def _do_llm_sync(self, text: str) -> None:
         """同步执行 LLM 调用"""
         try:
-            # 添加用户消息到上下文
             self.conversation_context.add_user_message(text)
-
-            # 获取历史消息
             messages = self.conversation_context.get_messages()
 
-            # 调用 LLM (流式)
             logger.info(f"调用 LLM: \"{text[:50]}...\"")
+
+            if self._llm_stream_enabled:
+                self._do_llm_streaming(messages)
+                return
+
             full_response = ""
             for delta in self.llm.chat_stream(messages):
                 full_response += delta
@@ -693,12 +791,7 @@ class SmartSpeakerEngine:
                 self.state_machine.transition(State.IDLE)
                 return
 
-            logger.info(f"LLM 响应: \"{full_response[:100]}...\"")
-
-            # 添加助手消息到上下文
             self.conversation_context.add_assistant_message(full_response)
-
-            # 发布 LLM 响应事件
             self.event_bus.publish(
                 Event.LLM_RESPONSE,
                 source="llm",
@@ -709,6 +802,108 @@ class SmartSpeakerEngine:
             self.event_bus.publish(
                 Event.LLM_ERROR, source="llm", error=str(e)
             )
+
+    def _do_llm_streaming(self, messages) -> None:
+        """流式 LLM → 分句 TTS → 流式播放"""
+        full_response = ""
+        sentence_buffer = ""
+        self._streaming_tts_active = True
+        self._stream_playback_started = False
+
+        try:
+            for delta in self.llm.chat_stream(messages):
+                full_response += delta
+                sentence_buffer += delta
+
+                self.event_bus.publish(
+                    Event.LLM_STREAM_CHUNK,
+                    source="llm",
+                    delta=delta,
+                )
+
+                sentences, sentence_buffer = extract_complete_sentences(
+                    sentence_buffer
+                )
+                for sentence in sentences:
+                    self._synthesize_and_stream_sentence(sentence)
+
+            remainder = sentence_buffer.strip()
+            if remainder:
+                self._synthesize_and_stream_sentence(remainder)
+
+            if self._stream_playback_started and self.audio_player:
+                self.audio_player.end_stream()
+                self.audio_player.wait_stream_done()
+
+            if not full_response:
+                logger.warning("LLM 返回空响应")
+                self.state_machine.transition(State.IDLE)
+                return
+
+            self.conversation_context.add_assistant_message(full_response)
+            self.event_bus.publish(
+                Event.LLM_RESPONSE,
+                source="llm",
+                text=full_response,
+                streamed=True,
+            )
+
+            if self._stream_playback_started:
+                self.event_bus.publish(Event.PLAYBACK_DONE, source="player")
+            else:
+                self.state_machine.transition(State.IDLE)
+
+        except Exception as e:
+            logger.error(f"流式 LLM 失败: {e}")
+            self.event_bus.publish(Event.LLM_ERROR, source="llm", error=str(e))
+        finally:
+            self._streaming_tts_active = False
+            self._stream_playback_started = False
+
+    def _synthesize_and_stream_sentence(self, text: str) -> None:
+        """合成单句并发布流式 TTS 块"""
+        if not text.strip():
+            return
+        try:
+            tts = self.tts_primary
+            if tts and tts.is_available:
+                result = tts.synthesize(text)
+                self.event_bus.publish(
+                    Event.TTS_STREAM_CHUNK,
+                    source="tts",
+                    audio_data=result.audio_data,
+                    format=result.format,
+                    is_last=False,
+                )
+                return
+        except Exception as e:
+            logger.warning(f"主 TTS 失败: {e}")
+
+        try:
+            if self.tts_fallback and self.tts_fallback.is_available:
+                if hasattr(self.tts_fallback, 'synthesize_stream'):
+                    pcm_chunks = list(self.tts_fallback.synthesize_stream(text))
+                    if pcm_chunks:
+                        self.event_bus.publish(
+                            Event.TTS_STREAM_CHUNK,
+                            source="tts_piper",
+                            audio_data=b"".join(pcm_chunks),
+                            format="pcm",
+                            sample_rate=22050,
+                            is_last=False,
+                        )
+                        return
+                result = self.tts_fallback.synthesize(text)
+                self.event_bus.publish(
+                    Event.TTS_STREAM_CHUNK,
+                    source="tts_fallback",
+                    audio_data=result.audio_data,
+                    format=result.format,
+                    is_last=False,
+                )
+        except Exception as e:
+            logger.error(f"流式 TTS 失败: {e}")
+            self.event_bus.publish(Event.TTS_ERROR, source="tts", error=str(e))
 
     def _do_tts(self, text: str) -> None:
         """执行 TTS 合成 (异步)"""
@@ -722,10 +917,11 @@ class SmartSpeakerEngine:
     def _do_tts_sync(self, text: str) -> None:
         """同步执行 TTS, 尝试主 TTS → 离线备份"""
         try:
-            # 尝试主 TTS (Edge)
-            result = self.tts_edge.synthesize(text)
-            logger.info(f"TTS 完成: {result.latency_ms:.0f}ms, "
-                         f"{len(result.audio_data)} bytes")
+            result = self.tts_primary.synthesize(text)
+            logger.info(
+                f"TTS 完成: {result.latency_ms:.0f}ms, "
+                f"{len(result.audio_data)} bytes"
+            )
             self.event_bus.publish(
                 Event.TTS_AUDIO_READY,
                 source="tts",
@@ -733,13 +929,13 @@ class SmartSpeakerEngine:
                 format=result.format,
             )
         except Exception as e:
-            logger.warning(f"主 TTS (Edge) 失败: {e}, 尝试离线备份")
+            logger.warning(f"主 TTS 失败: {e}, 尝试离线备份")
             try:
-                if self.tts_piper.is_available:
-                    result = self.tts_piper.synthesize(text)
+                if self.tts_fallback and self.tts_fallback.is_available:
+                    result = self.tts_fallback.synthesize(text)
                     self.event_bus.publish(
                         Event.TTS_AUDIO_READY,
-                        source="tts_piper",
+                        source="tts_fallback",
                         audio_data=result.audio_data,
                         format=result.format,
                     )
@@ -762,6 +958,7 @@ class SmartSpeakerEngine:
         # 切换到 SPEAKING 状态
         if not self.state_machine.transition(State.SPEAKING):
             logger.warning("无法切换到 SPEAKING 状态, 丢弃 TTS 输出")
+            self.state_machine.force_idle()
             return
 
         # 异步播放 (独立线程, 不阻塞事件总线)
@@ -780,6 +977,26 @@ class SmartSpeakerEngine:
         threading.Thread(
             target=_play_and_notify, daemon=True, name="player-thread"
         ).start()
+
+    def _on_tts_stream_chunk(self, event_data) -> None:
+        """TTS 流式音频块: 队列播放"""
+        audio_data = event_data.get("audio_data")
+        if not audio_data:
+            return
+
+        audio_format = event_data.get("format", "mp3")
+        sample_rate = event_data.get("sample_rate", 22050)
+
+        if not self._stream_playback_started:
+            if not self.state_machine.transition(State.SPEAKING):
+                logger.warning("无法切换到 SPEAKING 状态, 丢弃流式 TTS")
+                return
+            self._stream_playback_started = True
+            self.event_bus.publish(Event.PLAYBACK_START, source="player")
+            fmt = "pcm" if audio_format == "pcm" else audio_format
+            self.audio_player.start_stream(audio_format=fmt, sample_rate=sample_rate)
+
+        self.audio_player.feed_stream_chunk(audio_data)
 
     def _on_playback_done(self, event_data) -> None:
         """播放完成: 回到 IDLE"""
@@ -843,7 +1060,7 @@ class SmartSpeakerEngine:
                     self.audio_player.stop()
                     self.event_bus.publish(Event.PLAYBACK_INTERRUPTED, source="engine")
 
-                self._speech_audio_buffer = []
+                self._begin_utterance()
 
                 if self.state_machine.transition(State.LISTENING):
                     logger.info("⌨️  键盘唤醒!")
@@ -919,25 +1136,7 @@ class SmartSpeakerEngine:
                         f"无法处理输入")
                     continue
 
-                # 通过技能管理器处理
-                context = SkillContext(
-                    conversation_id=self.conversation_context.current_conversation_id,
-                )
-                result = self.skill_manager.execute(user_input, context)
-
-                if result and result.success and result.response_text:
-                    # 技能直接返回响应, 不需要 LLM
-                    logger.info(f"技能直接响应: \"{result.response_text}\"")
-                    self._do_tts(result.response_text)
-                elif result and not result.success:
-                    logger.error(f"技能执行失败: {result.error_message}")
-                    self._do_tts("抱歉, 出了点问题, 请再试一次")
-                elif result and result.success and result.needs_llm:
-                    # ChatSkill 兜底: 需要 LLM 处理
-                    self._do_llm(user_input)
-                else:
-                    logger.warning(f"无法处理输入: \"{user_input}\"")
-                    self._do_tts("抱歉, 我不太明白你的意思")
+                self._handle_user_text(user_input)
         except Exception as e:
             logger.error(f"stdin 循环异常: {e}")
 
@@ -970,7 +1169,8 @@ class SmartSpeakerEngine:
         logger.info("启动 Smart Speaker 引擎...")
         self._running = True
 
-        # 启动音频捕获
+        self._start_audio_worker()
+
         if self.audio_capture:
             self.audio_capture.start(self._audio_callback)
             logger.info("音频捕获已启动")
@@ -987,33 +1187,48 @@ class SmartSpeakerEngine:
         logger.info("正在关闭 Smart Speaker 引擎...")
         self._running = False
 
-        # 停止音频捕获
+        self._stop_audio_worker()
+
         if self.audio_capture:
             self.audio_capture.stop()
 
-        # 停止播放
         if self.audio_player:
             self.audio_player.stop()
+            self.audio_player.release()
 
-        # 释放资源
         if self.asr:
             self.asr.release()
+
+        if self.wake_word_detector:
+            self.wake_word_detector.release()
+
+        if self.tts_piper:
+            self.tts_piper.release()
+
+        for event, handler in self._event_handlers:
+            try:
+                self.event_bus.unsubscribe(event, handler)
+            except Exception:
+                pass
+        self._event_handlers.clear()
 
         logger.info("Smart Speaker 引擎已关闭")
 
     def _audio_callback(self, audio_frame: np.ndarray) -> None:
-        """
-        音频捕获回调 — 在音频线程中调用
-        将音频帧发布到事件总线
-        """
+        """音频捕获回调 — 仅入队，重逻辑由 audio-worker 处理"""
         try:
-            self.event_bus.publish(
-                Event.AUDIO_FRAME,
-                source="audio_capture",
-                frame=audio_frame,
-            )
+            self._audio_queue.put_nowait(audio_frame)
+        except queue.Full:
+            try:
+                self._audio_queue.get_nowait()
+            except queue.Empty:
+                pass
+            try:
+                self._audio_queue.put_nowait(audio_frame)
+            except queue.Full:
+                pass
         except Exception as e:
-            logger.error(f"音频回调异常: {e}")
+            logger.error(f"音频入队异常: {e}")
 
     def _signal_handler(self, signum, frame) -> None:
         """处理 SIGINT / SIGTERM"""

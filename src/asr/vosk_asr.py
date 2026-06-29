@@ -51,7 +51,14 @@ class VoskASR(BaseASR):
         self.sample_rate = sample_rate
         self._model = None
         self._vosk = None
-        self._recognizer = None  # 复用识别器提升准确率
+        self._recognizer = None
+        self._model_loaded = False
+
+    def _lazy_load_model(self) -> None:
+        """延迟加载 Vosk 模型"""
+        if self._model_loaded:
+            return
+        self._model_loaded = True
         self._init_model()
 
     def _init_model(self) -> None:
@@ -103,8 +110,6 @@ class VoskASR(BaseASR):
 
         if not self.is_available:
             raise RuntimeError("Vosk ASR 不可用")
-
-        # 转换为 int16 PCM
         if audio_data.dtype == np.float32:
             audio_int16 = (np.clip(audio_data, -1.0, 1.0) * 32767).astype(np.int16)
         else:
@@ -240,6 +245,7 @@ class VoskASR(BaseASR):
 
     @property
     def is_available(self) -> bool:
+        self._lazy_load_model()
         return self._model is not None
 
     def release(self) -> None:

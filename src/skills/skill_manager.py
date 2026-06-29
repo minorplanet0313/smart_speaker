@@ -30,6 +30,7 @@ class SkillManager:
     def __init__(self):
         self._skills: Dict[str, BaseSkill] = {}
         self._fallback_skill: Optional[BaseSkill] = None
+        self._sorted_skills: List[BaseSkill] = []
 
     def register(self, skill: BaseSkill) -> None:
         """
@@ -48,7 +49,16 @@ class SkillManager:
         if skill.priority == SkillPriority.FALLBACK:
             self._fallback_skill = skill
 
+        self._rebuild_sorted_list()
         logger.info(f"技能已注册: {skill.name} (priority={skill.priority.name})")
+
+    def _rebuild_sorted_list(self) -> None:
+        """按优先级预排序技能列表"""
+        self._sorted_skills = sorted(
+            self._skills.values(),
+            key=lambda s: s.priority.value,
+            reverse=True,
+        )
 
     def unregister(self, skill_name: str) -> bool:
         """
@@ -67,6 +77,7 @@ class SkillManager:
         if self._fallback_skill and self._fallback_skill.name == skill_name:
             self._fallback_skill = None
 
+        self._rebuild_sorted_list()
         logger.info(f"技能已注销: {skill_name}")
         return True
 
@@ -80,14 +91,7 @@ class SkillManager:
         Returns:
             匹配的技能实例, 或 None
         """
-        # 按优先级降序排列
-        sorted_skills = sorted(
-            self._skills.values(),
-            key=lambda s: s.priority.value,
-            reverse=True,
-        )
-
-        for skill in sorted_skills:
+        for skill in self._sorted_skills:
             try:
                 if skill.can_handle(text):
                     logger.debug(f"技能匹配: {skill.name} ← \"{text}\"")
@@ -150,11 +154,7 @@ class SkillManager:
                 "keywords": s.keywords,
                 "priority": s.priority.name,
             }
-            for s in sorted(
-                self._skills.values(),
-                key=lambda x: x.priority.value,
-                reverse=True,
-            )
+            for s in self._sorted_skills
         ]
 
     def clear(self) -> None:
@@ -163,4 +163,5 @@ class SkillManager:
             skill.on_unload()
         self._skills.clear()
         self._fallback_skill = None
+        self._sorted_skills = []
         logger.info("所有技能已清除")

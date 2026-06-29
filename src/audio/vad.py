@@ -14,6 +14,7 @@ from typing import Optional
 
 import numpy as np
 
+from src.audio.ring_buffer import AudioRingBuffer
 from src.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -62,7 +63,9 @@ class VoiceActivityDetector:
         self._speech_start_time: Optional[float] = None
         self._silence_start_time: Optional[float] = None
         self._speech_buffer: list = []
-        self._silero_buffer = np.array([], dtype=np.float32)
+        self._silero_buffer = AudioRingBuffer(max_samples=4096)
+        self._post_speech_pad_frames = 0
+        self._post_speech_pad_remaining = 0
         self._noise_floor = 0.0  # 自适应噪声底噪
         self._noise_samples = 0
         self._reset_state()
@@ -89,7 +92,9 @@ class VoiceActivityDetector:
         self._silence_start_time = None
         self._speech_detected = False
         # 清除 Silero 内部缓冲，避免跨语音段残留
-        self._silero_buffer = np.array([], dtype=np.float32)
+        self._silero_buffer.clear()
+        self._post_speech_pad_frames = 0
+        self._post_speech_pad_remaining = 0
 
     def process(self, audio_frame: np.ndarray) -> VADState:
         """
@@ -114,16 +119,26 @@ class VoiceActivityDetector:
                 self._speech_detected = True
                 self._is_speech = True
                 self._silence_start_time = None
+                chunk_samples = max(len(audio_frame), 1)
+                self._post_speech_pad_frames = max(
+                    1,
+                    int(self.speech_pad_ms * self.sample_rate / 1000 / chunk_samples),
+                )
+                self._post_speech_pad_remaining = self._post_speech_pad_frames
                 logger.debug(f"语音开始 (duration={speech_duration_ms:.0f}ms)")
                 return VADState.SPEECH_START
 
         elif is_speech and self._speech_detected:
-            # 语音进行中
             self._silence_start_time = None
+            self._post_speech_pad_remaining = self._post_speech_pad_frames
             return VADState.IN_SPEECH
 
         elif not is_speech and self._speech_detected:
-            # 可能的语音结束
+            # 可能的语音结束 — 先应用 speech_pad 延迟判定
+            if self._post_speech_pad_remaining > 0:
+                self._post_speech_pad_remaining -= 1
+                return VADState.IN_SPEECH
+
             if self._silence_start_time is None:
                 self._silence_start_time = now
 
@@ -173,17 +188,15 @@ class VoiceActivityDetector:
         try:
             # silero-vad 5.x 要求精确 512 帧 @16kHz (或 256 @8kHz)
             # 累积帧到内部 buffer，达到 512 帧后推理
-            self._silero_buffer = np.append(self._silero_buffer, audio_frame)
+            self._silero_buffer.append(audio_frame)
 
-            # 需要 512 帧（16kHz） 或 256 帧（8kHz）
             required_samples = 512 if self.sample_rate == 16000 else 256
             if len(self._silero_buffer) < required_samples:
-                # 还不够，用能量检测临时判断
                 return self._is_speech_energy(audio_frame)
 
-            # 取 512 帧
-            chunk = self._silero_buffer[:required_samples]
-            self._silero_buffer = self._silero_buffer[required_samples:]
+            chunk = self._silero_buffer.consume(required_samples)
+            if chunk is None:
+                return self._is_speech_energy(audio_frame)
 
             # silero-vad 5.x 需要 PyTorch tensor
             try:

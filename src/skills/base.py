@@ -13,6 +13,7 @@
 - SkillResult: 执行结果
 """
 
+import re
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from enum import Enum, auto
@@ -74,18 +75,22 @@ class BaseSkill(ABC):
     # --- 子类可选覆盖 ---
     require_network: bool = False  # 是否需要网络
 
-    @abstractmethod
+    def matches_keywords(self, text: str) -> bool:
+        """关键词子串匹配，排除常见误触发（如「时间旅行」）"""
+        if not self.keywords:
+            return False
+        for kw in self.keywords:
+            if kw not in text:
+                continue
+            # 时间类技能：「时间」需作为独立词出现
+            if kw == "时间" and re.search(r'时间(旅行|机器|胶囊|线|轴|管理)', text):
+                continue
+            return True
+        return False
+
     def can_handle(self, text: str) -> bool:
-        """
-        判断当前技能是否能处理该文本
-
-        Args:
-            text: 用户的语音输入文本
-
-        Returns:
-            True 如果该技能可以处理
-        """
-        ...
+        """默认实现：按关键词匹配"""
+        return self.matches_keywords(text)
 
     @abstractmethod
     def execute(

@@ -16,13 +16,31 @@
 """
 
 from dataclasses import dataclass
-from typing import Optional
+from typing import Dict, Optional, Tuple
 
 import numpy as np
 
 from src.utils.logger import get_logger
 
 logger = get_logger(__name__)
+
+# 按 (sample_rate, cutoff_hz, order) 缓存 SOS 系数
+_HIGHPASS_SOS_CACHE: Dict[Tuple[int, float, int], np.ndarray] = {}
+
+
+def _get_highpass_sos(
+    sample_rate: int,
+    cutoff_hz: float,
+    order: int,
+) -> np.ndarray:
+    key = (sample_rate, cutoff_hz, order)
+    if key not in _HIGHPASS_SOS_CACHE:
+        from scipy.signal import butter
+        nyquist = sample_rate / 2.0
+        _HIGHPASS_SOS_CACHE[key] = butter(
+            order, cutoff_hz / nyquist, btype='high', output='sos'
+        )
+    return _HIGHPASS_SOS_CACHE[key]
 
 
 @dataclass
@@ -67,15 +85,14 @@ def highpass_filter(
     Returns:
         滤波后的信号
     """
-    from scipy.signal import butter, sosfilt
+    from scipy.signal import sosfilt
 
     nyquist = sample_rate / 2.0
     if cutoff_hz >= nyquist:
         logger.warning(f"高通截止频率 ({cutoff_hz}Hz) 超过奈奎斯特频率, 跳过")
         return signal
 
-    # 使用二阶节 (SOS) 实现, 比 ba 形式更稳定
-    sos = butter(order, cutoff_hz / nyquist, btype='high', output='sos')
+    sos = _get_highpass_sos(sample_rate, cutoff_hz, order)
     return sosfilt(sos, signal).astype(np.float32)
 
 

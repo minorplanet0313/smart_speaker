@@ -147,3 +147,7 @@ class PiperTTS(BaseTTS):
     @property
     def voice_name(self) -> str:
         return self._voice_name
+
+    def release(self) -> None:
+        """释放 Piper 模型缓存"""
+        self._voice = None

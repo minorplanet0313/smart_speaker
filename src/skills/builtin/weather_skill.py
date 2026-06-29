@@ -51,9 +51,6 @@ class WeatherSkill(BaseSkill):
         self.api_key = api_key
         self.default_city = default_city
 
-    def can_handle(self, text: str) -> bool:
-        return any(kw in text for kw in self.keywords)
-
     def execute(
         self,
         text: str,

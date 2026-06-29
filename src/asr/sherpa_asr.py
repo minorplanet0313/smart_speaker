@@ -59,10 +59,17 @@ class SherpaASR(BaseASR):
         self._model = None       # sherpa_onnx.OnlineRecognizer
         self._stream = None      # 当前语音段的 stream
         self._sherpa_onnx = None  # sherpa_onnx 模块引用
+        self._model_loaded = False
+
+    def _lazy_load_model(self) -> None:
+        """延迟加载 sherpa-onnx 模型"""
+        if self._model_loaded:
+            return
+        self._model_loaded = True
         self._init_model()
 
     def _init_model(self) -> None:
-        """延迟加载 sherpa-onnx 模型"""
+        """加载 sherpa-onnx 模型"""
         try:
             import sherpa_onnx
             self._sherpa_onnx = sherpa_onnx
@@ -125,8 +132,6 @@ class SherpaASR(BaseASR):
         """开始一个新的语音段识别, 创建 stream"""
         if not self.is_available:
             raise RuntimeError("sherpa-onnx ASR 不可用")
-        if self._model is None:
-            raise RuntimeError("sherpa-onnx 模型未加载")
         self._stream = self._model.create_stream()
 
     def feed_chunk(
@@ -147,6 +152,8 @@ class SherpaASR(BaseASR):
             当前解码的 accepted 文本 (流式模式下通常返回 None,
             部分结果通过 partial_callback 获取)
         """
+        if not self.is_available:
+            raise RuntimeError("sherpa-onnx ASR 不可用")
         if self._stream is None:
             raise RuntimeError("请先调用 begin_utterance() 开始识别")
 
@@ -261,6 +268,7 @@ class SherpaASR(BaseASR):
 
     @property
     def is_available(self) -> bool:
+        self._lazy_load_model()
         return self._model is not None
 
     def release(self) -> None:

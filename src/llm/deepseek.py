@@ -73,6 +73,8 @@ class DeepSeekLLM(BaseLLM):
         temperature: float = 0.7,
         max_tokens: int = 1024,
         timeout: int = 30,
+        max_retries: int = 3,
+        backoff_base: float = 2.0,
     ):
         """
         Args:
@@ -89,6 +91,8 @@ class DeepSeekLLM(BaseLLM):
         self.temperature = temperature
         self.max_tokens = max_tokens
         self.timeout = timeout
+        self._max_retries = max_retries
+        self._backoff_base = backoff_base
 
         self._client = OpenAI(
             api_key=api_key,
@@ -98,7 +102,25 @@ class DeepSeekLLM(BaseLLM):
 
         logger.info(f"DeepSeek 客户端初始化: model={model}, base_url={base_url}")
 
-    @retry_on_error(max_retries=3, base_delay=1.0)
+    def _call_with_retry(self, func, *args, **kwargs):
+        """使用配置的重试参数执行 API 调用"""
+        last_exception = None
+        for attempt in range(self._max_retries):
+            try:
+                return func(*args, **kwargs)
+            except Exception as e:
+                last_exception = e
+                if attempt < self._max_retries - 1:
+                    delay = 1.0 * (self._backoff_base ** attempt)
+                    logger.warning(
+                        f"API 调用失败 (尝试 {attempt+1}/{self._max_retries}): {e}, "
+                        f"{delay:.1f}s 后重试..."
+                    )
+                    time.sleep(delay)
+                else:
+                    logger.error(f"API 调用全部失败 (共{self._max_retries}次): {e}")
+        raise last_exception
+
     def chat(
         self,
         messages: List[Dict[str, str]],
@@ -118,37 +140,31 @@ class DeepSeekLLM(BaseLLM):
         """
         start_time = time.time()
 
-        # 准备消息
-        full_messages = self._prepare_messages(messages)
+        def _do_chat():
+            full_messages = self._prepare_messages(messages)
+            params = {
+                "model": self.model,
+                "messages": full_messages,
+                "temperature": kwargs.get("temperature", self.temperature),
+                "max_tokens": kwargs.get("max_tokens", self.max_tokens),
+            }
+            nonlocal_start = start_time
+            if stream:
+                chunks = []
+                response = self._client.chat.completions.create(**params, stream=True)
+                for chunk in response:
+                    if chunk.choices and chunk.choices[0].delta.content:
+                        chunks.append(chunk.choices[0].delta.content)
+                text = "".join(chunks)
+                tokens = 0
+            else:
+                response = self._client.chat.completions.create(**params, stream=False)
+                text = response.choices[0].message.content or ""
+                tokens = response.usage.total_tokens if hasattr(response, 'usage') else 0
+            latency_ms = (time.time() - nonlocal_start) * 1000
+            return text, tokens, latency_ms
 
-        # 合并参数
-        params = {
-            "model": self.model,
-            "messages": full_messages,
-            "temperature": kwargs.get("temperature", self.temperature),
-            "max_tokens": kwargs.get("max_tokens", self.max_tokens),
-        }
-
-        if stream:
-            # 流式: 收集所有块
-            chunks = []
-            response = self._client.chat.completions.create(
-                **params, stream=True
-            )
-            for chunk in response:
-                if chunk.choices and chunk.choices[0].delta.content:
-                    chunks.append(chunk.choices[0].delta.content)
-
-            text = "".join(chunks)
-        else:
-            # 非流式
-            response = self._client.chat.completions.create(
-                **params, stream=False
-            )
-            text = response.choices[0].message.content or ""
-
-        latency_ms = (time.time() - start_time) * 1000
-        tokens = response.usage.total_tokens if hasattr(response, 'usage') else 0
+        text, tokens, latency_ms = self._call_with_retry(_do_chat)
 
         logger.debug(f"DeepSeek 响应: \"{text[:80]}...\" ({latency_ms:.0f}ms, {tokens}tokens)")
 
@@ -158,7 +174,6 @@ class DeepSeekLLM(BaseLLM):
             latency_ms=latency_ms,
         )
 
-    @retry_on_error(max_retries=2, base_delay=1.0)
     def chat_stream(
         self,
         messages: List[Dict[str, str]],
@@ -180,11 +195,26 @@ class DeepSeekLLM(BaseLLM):
             "stream": True,
         }
 
-        response = self._client.chat.completions.create(**params)
-
-        for chunk in response:
-            if chunk.choices and chunk.choices[0].delta.content:
-                yield chunk.choices[0].delta.content
+        last_exception = None
+        for attempt in range(self._max_retries):
+            try:
+                response = self._client.chat.completions.create(**params)
+                for chunk in response:
+                    if chunk.choices and chunk.choices[0].delta.content:
+                        yield chunk.choices[0].delta.content
+                return
+            except Exception as e:
+                last_exception = e
+                if attempt < self._max_retries - 1:
+                    delay = 1.0 * (self._backoff_base ** attempt)
+                    logger.warning(
+                        f"流式 API 调用失败 (尝试 {attempt+1}/{self._max_retries}): {e}, "
+                        f"{delay:.1f}s 后重试..."
+                    )
+                    time.sleep(delay)
+                else:
+                    logger.error(f"流式 API 调用全部失败 (共{self._max_retries}次): {e}")
+        raise last_exception
 
     def _prepare_messages(
         self,

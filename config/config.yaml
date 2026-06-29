@@ -122,6 +122,10 @@ skills:
     api_key: "${WEATHER_API_KEY}"    # 和风天气 API Key
     city: "auto"                     # auto = 基于 IP 定位
 
+# --- 调试设置 ---
+debug:
+  save_audio: false          # 是否保存每次语音结束的调试 WAV
+
 # --- GPIO 设置 (可选) ---
 gpio:
   enabled: false

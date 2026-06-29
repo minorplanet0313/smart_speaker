@@ -102,6 +102,88 @@ class TestStateMachine:
         assert sm.transition(State.MUTED) is True
         assert sm.transition(State.IDLE) is True
 
+    def test_timeout_persists_after_trigger(self):
+        import time
+        from src.core.state_machine import State, StateMachine
+
+        sm = StateMachine()
+        triggered = []
+
+        sm.set_timeout(State.LISTENING, 50, lambda: triggered.append(1))
+        sm.transition(State.LISTENING)
+        time.sleep(0.08)
+        sm.check_timeouts()
+        assert len(triggered) == 1
+
+        sm.force_idle()
+        sm.transition(State.LISTENING)
+        time.sleep(0.08)
+        sm.check_timeouts()
+        assert len(triggered) == 2
+
+
+class TestSentenceSplit:
+    """分句工具测试"""
+
+    def test_extract_sentences(self):
+        from src.utils.sentence_split import extract_complete_sentences
+
+        sentences, remainder = extract_complete_sentences("你好。世界！还有")
+        assert sentences == ["你好。", "世界！"]
+        assert remainder == "还有"
+
+
+class TestRingBuffer:
+    """环形缓冲区测试"""
+
+    def test_append_and_consume(self):
+        import numpy as np
+        from src.audio.ring_buffer import AudioRingBuffer
+
+        buf = AudioRingBuffer(max_samples=100)
+        buf.append(np.ones(60, dtype=np.float32))
+        buf.append(np.ones(60, dtype=np.float32))
+        assert len(buf) == 100
+
+        chunk = buf.consume(50)
+        assert chunk is not None
+        assert len(chunk) == 50
+
+
+class TestPreprocessingCache:
+    """预处理滤波器缓存测试"""
+
+    def test_highpass_cache(self):
+        import numpy as np
+        from src.audio.preprocessing import highpass_filter, _HIGHPASS_SOS_CACHE
+
+        _HIGHPASS_SOS_CACHE.clear()
+        signal = np.random.randn(1600).astype(np.float32) * 0.1
+        highpass_filter(signal, 16000, 80.0)
+        highpass_filter(signal, 16000, 80.0)
+        assert (16000, 80.0, 4) in _HIGHPASS_SOS_CACHE
+
+
+class TestSkillKeywords:
+    """技能关键词匹配测试"""
+
+    def test_time_skill_no_false_positive(self):
+        from src.skills.builtin.time_skill import TimeSkill
+
+        skill = TimeSkill()
+        assert skill.can_handle("现在几点了") is True
+        assert skill.can_handle("时间旅行") is False
+
+
+class TestConfigDebug:
+    """配置项测试"""
+
+    def test_debug_save_audio_default(self):
+        from src.utils.config import Config
+
+        config = Config("config/config.yaml")
+        assert config.get("debug.save_audio") is False
+
 
 class TestConversationContext:
     """对话上下文测试"""
