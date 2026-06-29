@@ -84,16 +84,17 @@ class AudioPlayer:
             samples_int16 = (np.clip(samples, -1.0, 1.0) * 32767).astype(np.int16)
 
             # 打开输出流
+            chunk_size = 2048  # 128ms @ 16kHz，避免 underrun
             stream = self._pa.open(
                 format=self._pyaudio.paInt16,
                 channels=1,
                 rate=sr,
                 output=True,
+                frames_per_buffer=chunk_size,
                 output_device_index=self._find_output_device(),
             )
 
             # 分块播放 (小块 = 低打断延迟)
-            chunk_size = 1024  # 64ms @ 16kHz
             for i in range(0, len(samples_int16), chunk_size):
                 if self._stop_requested:
                     break
@@ -174,6 +175,7 @@ class AudioPlayer:
             self._init_pyaudio()
             stream = None
             pending = np.array([], dtype=np.float32)
+            chunk_size = 2048  # 128ms @ 16kHz，避免 underrun
 
             while not self._stop_requested:
                 try:
@@ -199,16 +201,18 @@ class AudioPlayer:
 
                 pending = np.concatenate([pending, samples]) if len(pending) else samples
 
-                if stream is None and len(pending) > 0:
+                # 预缓冲至少 4 个 chunk (~512ms @16kHz) 再打开流，避免 underrun
+                min_buffer = chunk_size * 4
+                if stream is None and len(pending) >= min_buffer:
                     stream = self._pa.open(
                         format=self._pyaudio.paInt16,
                         channels=1,
                         rate=sr,
                         output=True,
+                        frames_per_buffer=chunk_size,
                         output_device_index=self._find_output_device(),
                     )
 
-                chunk_size = 1024
                 while stream and len(pending) >= chunk_size:
                     if self._stop_requested:
                         break

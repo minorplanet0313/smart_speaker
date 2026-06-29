@@ -65,6 +65,7 @@ class VoskASR(BaseASR):
         """初始化 Vosk 模型"""
         try:
             import vosk
+            vosk.SetLogLevel(-1)  # 静默 Kaldi 日志
             self._vosk = vosk
 
             if not os.path.exists(self.model_path):

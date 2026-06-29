@@ -54,7 +54,11 @@ class Config:
             var_name = match.group(1)
             value = os.environ.get(var_name, "")
             if not value:
-                print(f"[WARNING] 环境变量 {var_name} 未设置, 使用空字符串")
+                # 只在 DEBUG 级别提示，避免每次启动都打印警告
+                import logging
+                logging.getLogger("smart_speaker").debug(
+                    f"环境变量 {var_name} 未设置, 使用空字符串"
+                )
             return value
 
         return pattern.sub(_replace, text)

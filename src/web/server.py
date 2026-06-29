@@ -211,9 +211,15 @@ class WebServer:
             response.set_header("Access-Control-Allow-Headers", "Content-Type")
             return ""
 
-        # 启动
-        from wsgiref.simple_server import make_server
-        self._httpd = make_server(self.host, self.port, app)
+        # 启动 (使用静默 handler，避免每次 API 请求都打 stderr 日志)
+        from wsgiref.simple_server import make_server, WSGIRequestHandler
+
+        class QuietHandler(WSGIRequestHandler):
+            def log_message(self, fmt, *args):
+                pass  # 静默 HTTP 访问日志
+
+        self._httpd = make_server(self.host, self.port, app,
+                                  handler_class=QuietHandler)
         logger.info(f"Web 服务器已启动: http://{self.host}:{self.port}")
         try:
             self._httpd.serve_forever(poll_interval=0.5)

@@ -75,8 +75,12 @@ def setup_logger(
         logger.addHandler(file_handler)
 
     # 抑制第三方库的 DEBUG 日志
-    for lib in ("urllib3", "requests", "httpx", "httpcore", "openwakeword"):
+    for lib in ("urllib3", "requests", "httpx", "httpcore", "openwakeword",
+                "aiohttp", "asyncio", "edge_tts"):
         logging.getLogger(lib).setLevel(logging.WARNING)
+
+    # 抑制 C 库直接输出的噪音（ALSA Unknown PCM、Vosk Kaldi LOG）
+    suppress_native_logs()
 
     return logger
 
@@ -91,6 +95,33 @@ def get_logger(name: str = ROOT_LOGGER_NAME) -> logging.Logger:
     if name == ROOT_LOGGER_NAME or name.startswith(ROOT_LOGGER_NAME + "."):
         return logging.getLogger(name)
     return logging.getLogger(f"{ROOT_LOGGER_NAME}.{name}")
+
+
+def suppress_native_logs() -> None:
+    """抑制 C 库（Vosk/Kaldi）直接输出到 stderr 的噪音日志"""
+    # Vosk/Kaldi: 设置最低日志级别消除 "LOG (VoskAPI:...)" 输出
+    try:
+        import vosk
+        vosk.SetLogLevel(-1)
+    except Exception:
+        pass
+
+
+def suppress_alsa_noise() -> None:
+    """初始化音频模块时临时静默 ALSA stderr 噪音 (Unknown PCM 等无害警告)"""
+    import os
+    devnull = os.open(os.devnull, os.O_WRONLY)
+    old_stderr = os.dup(2)
+    os.dup2(devnull, 2)
+    os.close(devnull)
+    return old_stderr
+
+
+def restore_alsa_noise(old_stderr: int) -> None:
+    """恢复 stderr"""
+    import os
+    os.dup2(old_stderr, 2)
+    os.close(old_stderr)
 
 
 def _reset_child_levels(root_name: str) -> None:

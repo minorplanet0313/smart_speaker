@@ -36,7 +36,7 @@ from src.skills.skill_manager import SkillManager
 from src.skills.builtin.chat_skill import ChatSkill
 from src.skills.builtin.time_skill import TimeSkill
 from src.utils.config import Config, get_config
-from src.utils.logger import get_logger, setup_logger
+from src.utils.logger import get_logger, setup_logger, suppress_alsa_noise, restore_alsa_noise
 from src.utils.messages import ERROR_GENERIC, ERROR_NOT_UNDERSTOOD
 from src.utils.sentence_split import extract_complete_sentences
 
@@ -474,7 +474,7 @@ class SmartSpeakerEngine:
             )
             if now - self._audio_level_debug_time >= 5.0:
                 avg_rms = self._audio_level_rms_sum / max(self._audio_level_samples, 1)
-                logger.info(
+                logger.debug(
                     f"🎤 音频电平: RMS={avg_rms:.4f} "
                     f"({'正常' if avg_rms > 0.001 else '⚠️ 太弱/无声!'}) "
                     f"[{self._audio_level_samples} 帧/5s]"
@@ -1201,7 +1201,11 @@ class SmartSpeakerEngine:
         self._start_audio_worker()
 
         if self.audio_capture:
-            self.audio_capture.start(self._audio_callback)
+            saved = suppress_alsa_noise()
+            try:
+                self.audio_capture.start(self._audio_callback)
+            finally:
+                restore_alsa_noise(saved)
             logger.info("音频捕获已启动")
 
         logger.info("Smart Speaker 引擎启动完成 ✓")
