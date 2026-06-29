@@ -198,6 +198,8 @@ class AudioPlayer:
                     sr = 16000
                 if samples.ndim > 1:
                     samples = samples.mean(axis=1)
+                if len(samples) == 0:
+                    continue
 
                 pending = np.concatenate([pending, samples]) if len(pending) else samples
 
@@ -220,6 +222,12 @@ class AudioPlayer:
                     pending = pending[chunk_size:]
                     int16 = (np.clip(block, -1.0, 1.0) * 32767).astype(np.int16)
                     stream.write(int16.tobytes())
+
+                # 没数据可写时关闭流，避免持续空转 underrun
+                if stream and len(pending) < chunk_size:
+                    stream.stop_stream()
+                    stream.close()
+                    stream = None
 
             if stream and len(pending) > 0 and not self._stop_requested:
                 int16 = (np.clip(pending, -1.0, 1.0) * 32767).astype(np.int16)
@@ -278,11 +286,11 @@ class AudioPlayer:
 
     def _resample(self, samples: np.ndarray, orig_sr: int, target_sr: int) -> np.ndarray:
         """简单线性重采样"""
-        if orig_sr == target_sr:
+        if orig_sr == target_sr or len(samples) == 0:
             return samples
         from scipy import signal
         duration = len(samples) / orig_sr
-        num_target = int(duration * target_sr)
+        num_target = max(1, int(duration * target_sr))
         return signal.resample(samples, num_target)
 
     def _find_output_device(self) -> Optional[int]:
