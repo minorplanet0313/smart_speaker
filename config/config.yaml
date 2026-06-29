@@ -82,7 +82,7 @@ gpio:
 llm:
   api_key: ${DEEPSEEK_API_KEY}
   base_url: https://api.deepseek.com
-  max_tokens: 1000000
+  max_tokens: 393216
   model: deepseek-v4-pro
   provider: deepseek
   retry:
