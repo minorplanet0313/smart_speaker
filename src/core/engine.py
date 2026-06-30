@@ -330,8 +330,12 @@ class SmartSpeakerEngine:
         weather_api_key = skills_config.get("weather", {}).get("api_key", "")
         if "weather" in builtin_enabled and weather_api_key:
             from src.skills.builtin.weather_skill import WeatherSkill
-            default_city = skills_config.get("weather", {}).get("city", "auto")
-            self.skill_manager.register(WeatherSkill(weather_api_key, default_city))
+            weather_cfg = skills_config.get("weather", {})
+            default_city = weather_cfg.get("city", "auto")
+            api_host = weather_cfg.get("api_host", "devapi.qweather.com")
+            self.skill_manager.register(
+                WeatherSkill(weather_api_key, default_city, api_host)
+            )
 
         logger.info(
             f"技能管理器初始化完成: "

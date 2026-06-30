@@ -88,46 +88,46 @@ class WebServer:
             all_events = collector.get_history(100)
             state["_events"] = list(all_events)[-30:]   # 最近 30 条事件
             state["_seq"] = len(all_events)               # 当前 event 序列号
-            return json.dumps(state, ensure_ascii=False)
+            return json.dumps(state, ensure_ascii=False, default=str)
 
         @app.get("/api/history")
         def api_history():
             n = int(request.query.get("n", 50))
             response.content_type = "application/json"
-            return json.dumps(collector.get_history(n), ensure_ascii=False)
+            return json.dumps(collector.get_history(n), ensure_ascii=False, default=str)
 
         @app.get("/api/messages")
         def api_messages():
             n = int(request.query.get("n", 20))
             response.content_type = "application/json"
-            return json.dumps(collector.get_messages(n), ensure_ascii=False)
+            return json.dumps(collector.get_messages(n), ensure_ascii=False, default=str)
 
         @app.get("/api/system")
         def api_system():
             response.content_type = "application/json"
-            return json.dumps(collector.get_system_info(), ensure_ascii=False)
+            return json.dumps(collector.get_system_info(), ensure_ascii=False, default=str)
 
         @app.get("/api/config")
         def api_config():
             response.content_type = "application/json"
-            return json.dumps(collector.get_config(), ensure_ascii=False)
+            return json.dumps(collector.get_config(), ensure_ascii=False, default=str)
 
         @app.get("/api/audio/devices")
         def api_audio_devices():
             response.content_type = "application/json"
-            return json.dumps(collector.get_audio_devices(), ensure_ascii=False)
+            return json.dumps(collector.get_audio_devices(), ensure_ascii=False, default=str)
 
         @app.get("/api/config/schema")
         def api_config_schema():
             from src.web.config_schema import get_schema_list
             response.content_type = "application/json"
-            return json.dumps(get_schema_list(), ensure_ascii=False)
+            return json.dumps(get_schema_list(), ensure_ascii=False, default=str)
 
         @app.get("/api/config/categories")
         def api_config_categories():
             from src.web.config_schema import get_categories
             response.content_type = "application/json"
-            return json.dumps(get_categories(), ensure_ascii=False)
+            return json.dumps(get_categories(), ensure_ascii=False, default=str)
 
         @app.post("/api/config")
         def api_config_update():
@@ -135,7 +135,7 @@ class WebServer:
                 updates = request.json
                 result = collector.update_config(updates)
                 response.content_type = "application/json"
-                return json.dumps(result, ensure_ascii=False)
+                return json.dumps(result, ensure_ascii=False, default=str)
             except Exception as e:
                 response.status = 400
                 return json.dumps({"ok": False, "error": str(e)})

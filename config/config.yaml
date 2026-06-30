@@ -104,6 +104,9 @@ skills:
   weather:
     api_key: ${WEATHER_API_KEY}
     city: auto
+    # API Host: 登录 https://console.qweather.com/setting 获取你的专属域名
+    # 旧公共域名 devapi.qweather.com 已从2026年起逐步停止服务
+    api_host: mn4up647yj.re.qweatherapi.com
 tts:
   edge:
     pitch: +0Hz

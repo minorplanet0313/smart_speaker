@@ -72,6 +72,10 @@ class WebEventCollector:
     def _on_event(self, event_data) -> None:
         """EventBus 回调 — 必须极快返回，不阻塞"""
         data = dict(event_data.data)
+        # 清除不可 JSON 序列化的值（如 TTS audio_data bytes）
+        for key in list(data.keys()):
+            if isinstance(data[key], bytes):
+                data[key] = f"[binary: {len(data[key])} bytes]"
         record = {
             "event": event_data.event.name,
             "source": event_data.source,
