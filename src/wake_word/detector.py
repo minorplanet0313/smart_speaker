@@ -66,6 +66,12 @@ class WakeWordDetector:
         self._samples_per_chunk = int(16000 * chunk_duration_ms / 1000)
         self._last_trigger_time = 0.0
 
+        # 调试计数器
+        self._debug_sample_count = 0
+        self._debug_rms_sum = 0.0
+        self._debug_predict_count = 0
+        self._debug_max_score = 0.0
+
         # 模型路径存在性检查 (延迟加载)
         self._model_path_valid = bool(model_path)
 
@@ -118,9 +124,6 @@ class WakeWordDetector:
         Returns:
             置信度分数 [0, 1], 0 表示未检测到
         """
-        if self._model is None:
-            return 0.0
-
         self._lazy_load_model()
         if self._model is None:
             return 0.0
@@ -130,11 +133,6 @@ class WakeWordDetector:
 
         # 每约 2 秒打印一次音频能量 (调试用)
         if logger.isEnabledFor(10):  # DEBUG level
-            if not hasattr(self, '_debug_sample_count'):
-                self._debug_sample_count = 0
-                self._debug_rms_sum = 0.0
-                self._debug_predict_count = 0
-                self._debug_max_score = 0.0
             self._debug_sample_count += len(audio_frame)
             self._debug_rms_sum += float(np.sqrt(np.mean(np.square(audio_frame))) if len(audio_frame) > 0 else 0.0)
 
@@ -146,7 +144,10 @@ class WakeWordDetector:
 
             try:
                 # openWakeWord 推理
-                predictions = self._model.predict(chunk)
+                # 注意: openWakeWord 内部会将 list 转为 int16 (astype(np.int16)),
+                # float32 [-1,1] 会被截断为 0 (如 0.5→0)。必须在调用前转为 int16。
+                chunk_int16 = (chunk * 32767).clip(-32768, 32767).astype(np.int16)
+                predictions = self._model.predict(chunk_int16)
                 self._debug_predict_count += 1
 
                 # predictions 是 dict: {model_name: score}

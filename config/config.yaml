@@ -121,7 +121,7 @@ wake_word:
   engine: openwakeword
   inference_framework: onnx
   model_path: ./models/openwakeword/xiao_zhi.onnx
-  threshold: 0.3
+  threshold: 0.7
   # Porcupine 设置 (engine: porcupine 时生效)
   # 免费获取 access_key: https://console.picovoice.ai/
   porcupine_access_key: ${PORCUPINE_ACCESS_KEY}

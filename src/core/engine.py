@@ -190,6 +190,10 @@ class SmartSpeakerEngine:
             logger.info(f"唤醒词检测 (openWakeWord) 初始化完成, "
                         f"threshold={ww_config.get('threshold', 0.5)}")
 
+            # 预检: 确保模型能加载
+            if not self.wake_word_detector.is_available:
+                logger.error("唤醒词模型加载失败! 语音唤醒不可用，请检查模型路径和 openwakeword 安装")
+
     def _init_asr(self) -> None:
         """初始化语音识别 (本地主引擎 + 云端备份)"""
         asr_config = self.config.get("asr", {})
