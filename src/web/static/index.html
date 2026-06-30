@@ -6,172 +6,328 @@
 <title>小智音箱 · 控制面板</title>
 <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.14.x/dist/cdn.min.js"></script>
 <style>
-  :root { --bg:#0f172a; --card:#1e293b; --text:#e2e8f0; --muted:#94a3b8;
-          --green:#22c55e; --blue:#3b82f6; --red:#ef4444; --yellow:#eab308;
-          --purple:#a855f7; --border:#334155; }
+  :root {
+    --bg:#0f172a; --card:#1e293b; --card-hover:#233249; --text:#e2e8f0; --muted:#94a3b8;
+    --green:#22c55e; --blue:#3b82f6; --red:#ef4444; --yellow:#eab308; --orange:#f97316;
+    --purple:#a855f7; --border:#334155; --border-light:#475569;
+    --shadow-sm:0 1px 2px rgba(0,0,0,.3); --shadow:0 4px 12px rgba(0,0,0,.4);
+    --shadow-lg:0 8px 24px rgba(0,0,0,.5);
+    --radius:10px; --radius-sm:6px; --radius-lg:14px;
+    --transition:150ms ease; --transition-slow:300ms ease;
+    --font-mono:"SF Mono","Fira Code","Cascadia Code",monospace;
+  }
   * { box-sizing:border-box; margin:0; padding:0; }
-  body { font-family:system-ui,-apple-system,sans-serif; background:var(--bg); color:var(--text); min-height:100vh; }
-  .app { max-width:1200px; margin:0 auto; padding:16px; }
+  body { font-family:system-ui,-apple-system,sans-serif; background:var(--bg); color:var(--text); min-height:100vh; line-height:1.5; }
+  .app { max-width:1400px; margin:0 auto; padding:20px 24px; }
 
-  /* Header */
-  .header { display:flex; align-items:center; gap:12px; padding:12px 0; border-bottom:1px solid var(--border); margin-bottom:16px; }
-  .header h1 { font-size:1.2rem; font-weight:600; }
-  .dot { width:10px; height:10px; border-radius:50%; display:inline-block; }
-  .dot.idle{background:var(--green)} .dot.listening{background:var(--blue);animation:pulse .8s infinite}
-  .dot.thinking{background:var(--purple);animation:pulse .5s infinite} .dot.speaking{background:var(--yellow)}
-  .dot.error{background:var(--red)} .dot.muted{background:var(--muted)}
-  @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.3} }
-  .tag { font-size:.75rem; padding:2px 8px; border-radius:12px; background:var(--border); }
+  /* ── Header ── */
+  .header { display:flex; align-items:center; gap:14px; padding:14px 0; border-bottom:1px solid var(--border); margin-bottom:20px; }
+  .header h1 { font-size:1.3rem; font-weight:700; letter-spacing:-.3px; }
+  .logo { font-size:1.5rem; }
+  .dot { width:12px; height:12px; border-radius:50%; display:inline-block; flex-shrink:0; transition:background var(--transition),box-shadow var(--transition); }
+  .dot.idle{background:var(--green);box-shadow:0 0 8px rgba(34,197,94,.5);animation:breathe 2s ease-in-out infinite}
+  .dot.listening{background:var(--blue);box-shadow:0 0 10px rgba(59,130,246,.6);animation:pulse .8s infinite}
+  .dot.thinking{background:var(--purple);box-shadow:0 0 10px rgba(168,85,247,.6);animation:spin-pulse 1s infinite}
+  .dot.speaking{background:var(--yellow);box-shadow:0 0 8px rgba(234,179,8,.5)}
+  .dot.muted{background:var(--muted);box-shadow:none}
+  .dot.error{background:var(--red);box-shadow:0 0 10px rgba(239,68,68,.6);animation:pulse .6s infinite}
+  @keyframes breathe { 0%,100%{transform:scale(1);opacity:1} 50%{transform:scale(1.25);opacity:.6} }
+  @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.25} }
+  @keyframes spin-pulse { 0%{transform:rotate(0deg) scale(1)} 50%{transform:rotate(180deg) scale(.7)} 100%{transform:rotate(360deg) scale(1)} }
+  .tag { font-size:.72rem; padding:3px 10px; border-radius:12px; background:var(--border); font-weight:500; letter-spacing:.3px; text-transform:uppercase; }
+  .header-spacer { flex:1; }
 
-  /* Grid */
-  .grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(280px,1fr)); gap:12px; }
-  .card { background:var(--card); border-radius:10px; padding:14px; border:1px solid var(--border); }
-  .card h2 { font-size:.85rem; color:var(--muted); margin-bottom:10px; text-transform:uppercase; letter-spacing:.5px; }
-
-  /* Status */
-  .stat-row { display:flex; justify-content:space-between; padding:4px 0; font-size:.82rem; }
-  .stat-row span:last-child { color:var(--muted); }
-
-  /* Audio meter */
-  .meter { height:6px; background:var(--border); border-radius:3px; overflow:hidden; margin:8px 0; }
-  .meter-bar { height:100%; background:linear-gradient(90deg,var(--green),var(--yellow),var(--red)); border-radius:3px; transition:width .1s; }
-
-  /* Messages */
-  .msg { padding:8px 10px; margin:6px 0; border-radius:8px; font-size:.82rem; line-height:1.4; }
-  .msg.user { background:#1e3a5f; margin-left:24px; }
-  .msg.assistant { background:#1a2e1a; margin-right:24px; }
-  .msg .role { font-size:.7rem; color:var(--muted); margin-bottom:2px; }
-
-  /* Events timeline */
-  .event { font-size:.75rem; padding:3px 0; border-bottom:1px solid var(--border); display:flex; gap:8px; }
-  .event .ts { color:var(--muted); white-space:nowrap; min-width:70px; }
-  .event .type { color:var(--blue); min-width:100px; font-weight:500; }
-  .event .detail { color:var(--muted); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-
-  /* Tabs */
-  .tabs { display:flex; gap:4px; margin-bottom:12px; }
-  .tab { padding:6px 14px; border-radius:6px; font-size:.8rem; cursor:pointer; border:1px solid var(--border); background:transparent; color:var(--muted); }
-  .tab.active { background:var(--blue); color:#fff; border-color:var(--blue); }
-
-  /* Input */
-  .input-row { display:flex; gap:8px; margin-top:8px; }
-  .input-row input { flex:1; padding:8px 12px; border-radius:8px; border:1px solid var(--border); background:var(--bg); color:var(--text); font-size:.85rem; }
-  .input-row button { padding:8px 16px; border-radius:8px; border:none; background:var(--blue); color:#fff; cursor:pointer; font-size:.85rem; font-weight:500; }
-  .input-row button:hover { opacity:.85; }
-
-  /* Config editor */
-  .config-area { width:100%; min-height:200px; background:var(--bg); color:var(--text); border:1px solid var(--border); border-radius:8px; padding:10px; font-family:monospace; font-size:.78rem; resize:vertical; }
-
-  /* Buttons */
-  .btn-sm { padding:4px 12px; border-radius:6px; border:1px solid var(--border); background:var(--card); color:var(--text); cursor:pointer; font-size:.75rem; }
+  /* ── Buttons ── */
+  .btn { padding:7px 16px; border-radius:var(--radius-sm); border:none; cursor:pointer; font-size:.82rem; font-weight:500; transition:all var(--transition); display:inline-flex; align-items:center; gap:6px; }
+  .btn:active { transform:scale(.97); }
+  .btn:focus-visible { outline:2px solid var(--blue); outline-offset:2px; }
+  .btn-primary { background:var(--blue); color:#fff; }
+  .btn-primary:hover { background:#2563eb; box-shadow:0 2px 8px rgba(59,130,246,.4); }
+  .btn-secondary { background:var(--card); color:var(--text); border:1px solid var(--border); }
+  .btn-secondary:hover { background:var(--border); }
+  .btn-danger { background:transparent; color:var(--red); border:1px solid var(--red); }
+  .btn-danger:hover { background:var(--red); color:#fff; }
+  .btn-sm { padding:4px 10px; border-radius:var(--radius-sm); border:1px solid var(--border); background:var(--card); color:var(--text); cursor:pointer; font-size:.73rem; transition:all var(--transition); }
   .btn-sm:hover { background:var(--border); }
-  .btn-sm.danger { border-color:var(--red); color:var(--red); }
+  .btn-sm.active { background:var(--blue); color:#fff; border-color:var(--blue); }
+  .btn:disabled, .btn-sm:disabled { opacity:.5; cursor:not-allowed; pointer-events:none; }
 
-  /* Scrollable */
-  .scroll { max-height:300px; overflow-y:auto; }
-  .scroll::-webkit-scrollbar { width:4px; }
-  .scroll::-webkit-scrollbar-thumb { background:var(--border); border-radius:2px; }
+  /* ── Grid & Cards ── */
+  .grid { display:grid; grid-template-columns:repeat(3,1fr); gap:14px; }
+  @media (max-width:900px) { .grid { grid-template-columns:1fr; } }
+  .card { background:var(--card); border-radius:var(--radius); padding:16px; border:1px solid var(--border); box-shadow:var(--shadow-sm); transition:box-shadow var(--transition),border-color var(--transition); }
+  .card:hover { box-shadow:var(--shadow); }
+  .card h2 { font-size:.82rem; color:var(--muted); margin-bottom:12px; text-transform:uppercase; letter-spacing:.8px; font-weight:600; display:flex; align-items:center; gap:6px; }
 
-  /* Config form */
-  .config-field { padding:10px 0; border-bottom:1px solid var(--border); }
-  .config-field.error { border-left:3px solid var(--red); padding-left:8px; }
-  .config-label { display:flex; align-items:center; gap:8px; font-size:.82rem; font-weight:500; margin-bottom:2px; }
+  /* ── Status rows ── */
+  .stat-row { display:flex; justify-content:space-between; align-items:center; padding:5px 0; font-size:.82rem; }
+  .stat-row span:first-child { color:var(--muted); }
+  .stat-row span:last-child { font-weight:500; font-variant-numeric:tabular-nums; }
+  .stat-val { font-family:var(--font-mono); font-size:.78rem; }
+
+  /* ── Audio meter ── */
+  .meter-wrap { margin:8px 0; }
+  .meter { height:8px; background:var(--border); border-radius:4px; overflow:hidden; position:relative; }
+  .meter-bar { height:100%; background:linear-gradient(90deg,var(--green),var(--yellow),var(--orange),var(--red)); border-radius:4px; transition:width 80ms linear; position:relative; }
+  .meter-bar::after { content:""; position:absolute; right:0; top:0; bottom:0; width:3px; background:#fff; border-radius:2px; opacity:.6; }
+  .meter-label { display:flex; justify-content:space-between; font-size:.68rem; color:var(--muted); margin-top:3px; }
+
+  /* ── Tabs ── */
+  .tabs { display:flex; gap:6px; margin-bottom:14px; }
+  .tab { padding:7px 16px; border-radius:var(--radius-sm); font-size:.8rem; cursor:pointer; border:1px solid var(--border); background:transparent; color:var(--muted); font-weight:500; transition:all var(--transition); }
+  .tab:hover { color:var(--text); border-color:var(--border-light); }
+  .tab.active { background:var(--blue); color:#fff; border-color:var(--blue); box-shadow:0 2px 8px rgba(59,130,246,.3); }
+  .tab-content { transition:opacity var(--transition-slow); }
+  .tab-content.fade-enter { opacity:0; }
+  .tab-content.fade-active { opacity:1; }
+
+  /* ── Messages ── */
+  .msg { padding:10px 12px; margin:8px 0; border-radius:var(--radius-sm); font-size:.84rem; line-height:1.5; position:relative; animation:msg-in var(--transition-slow); }
+  @keyframes msg-in { from{opacity:0;transform:translateY(8px)} to{opacity:1;transform:translateY(0)} }
+  .msg.user { background:rgba(59,130,246,.15); margin-left:32px; border-left:3px solid var(--blue); }
+  .msg.assistant { background:rgba(34,197,94,.1); margin-right:32px; border-left:3px solid var(--green); }
+  .msg .role { font-size:.7rem; color:var(--muted); margin-bottom:3px; font-weight:600; letter-spacing:.3px; text-transform:uppercase; }
+  .msg .ts { font-size:.65rem; color:var(--muted); float:right; margin-top:2px; font-family:var(--font-mono); }
+
+  /* ── Typing indicator ── */
+  .typing { display:flex; gap:4px; padding:4px 0; }
+  .typing span { width:6px; height:6px; border-radius:50%; background:var(--muted); animation:typing-bounce 1.2s infinite; }
+  .typing span:nth-child(2){animation-delay:.15s}
+  .typing span:nth-child(3){animation-delay:.3s}
+  @keyframes typing-bounce { 0%,60%,100%{transform:translateY(0);opacity:.4} 30%{transform:translateY(-6px);opacity:1} }
+
+  /* ── Events timeline ── */
+  .event { font-size:.76rem; padding:5px 0; border-bottom:1px solid rgba(51,65,85,.5); display:flex; gap:10px; align-items:baseline; }
+  .event:hover { background:rgba(255,255,255,.02); }
+  .event .ts { color:var(--muted); white-space:nowrap; min-width:75px; font-family:var(--font-mono); font-size:.7rem; }
+  .event .type { color:var(--blue); min-width:110px; font-weight:600; font-size:.72rem; }
+  .event .detail { color:var(--muted); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; flex:1; }
+
+  /* ── Input row ── */
+  .input-row { display:flex; gap:8px; margin-top:10px; align-items:center; }
+  .input-row input { flex:1; padding:9px 14px; border-radius:var(--radius-sm); border:1px solid var(--border); background:var(--bg); color:var(--text); font-size:.85rem; transition:border-color var(--transition); }
+  .input-row input:focus { outline:none; border-color:var(--blue); box-shadow:0 0 0 3px rgba(59,130,246,.15); }
+  .input-row input::placeholder { color:var(--muted); }
+
+  /* ── Config ── */
+  .config-area { width:100%; min-height:200px; background:var(--bg); color:var(--text); border:1px solid var(--border); border-radius:var(--radius-sm); padding:10px; font-family:var(--font-mono); font-size:.78rem; resize:vertical; }
+  .config-area:focus { outline:none; border-color:var(--blue); box-shadow:0 0 0 3px rgba(59,130,246,.15); }
+  .config-field { padding:12px 0; border-bottom:1px solid var(--border); }
+  .config-field.error { border-left:3px solid var(--red); padding-left:10px; }
+  .config-label { display:flex; align-items:center; gap:8px; font-size:.82rem; font-weight:500; margin-bottom:3px; }
   .config-desc { display:block; font-size:.7rem; color:var(--muted); margin-bottom:6px; }
-  .config-input, .config-select { width:100%; padding:6px 10px; border-radius:6px; border:1px solid var(--border); background:var(--bg); color:var(--text); font-size:.8rem; }
+  .config-input, .config-select { width:100%; padding:7px 10px; border-radius:var(--radius-sm); border:1px solid var(--border); background:var(--bg); color:var(--text); font-size:.8rem; transition:border-color var(--transition); }
+  .config-input:focus, .config-select:focus { outline:none; border-color:var(--blue); }
   .config-select { cursor:pointer; }
-  .restart-badge { font-size:.65rem; padding:1px 6px; border-radius:8px; background:var(--yellow); color:#000; }
-  .no-restart-badge { font-size:.65rem; padding:1px 6px; border-radius:8px; background:var(--green); color:#fff; }
+  .badge { font-size:.62rem; padding:1px 7px; border-radius:10px; font-weight:600; letter-spacing:.3px; }
+  .badge-restart { background:rgba(234,179,8,.2); color:var(--yellow); }
+  .badge-hot { background:rgba(34,197,94,.2); color:var(--green); }
   .number-row { display:flex; align-items:center; gap:12px; }
   .number-row input[type=range] { flex:1; accent-color:var(--blue); }
-  .number-value { min-width:40px; text-align:right; font-family:monospace; font-size:.8rem; color:var(--muted); }
+  .number-value { min-width:44px; text-align:right; font-family:var(--font-mono); font-size:.8rem; color:var(--muted); }
   .field-error { display:block; font-size:.7rem; color:var(--red); margin-top:4px; }
-  .toggle { position:relative; display:inline-block; width:40px; height:22px; }
+  .toggle { position:relative; display:inline-block; width:42px; height:24px; }
   .toggle input { opacity:0; width:0; height:0; }
-  .toggle-slider { position:absolute; cursor:pointer; inset:0; background:var(--border); border-radius:22px; transition:.2s; }
-  .toggle-slider:before { content:""; position:absolute; height:16px; width:16px; left:3px; bottom:3px; background:white; border-radius:50%; transition:.2s; }
+  .toggle-slider { position:absolute; cursor:pointer; inset:0; background:var(--border); border-radius:24px; transition:.2s; }
+  .toggle-slider:before { content:""; position:absolute; height:18px; width:18px; left:3px; bottom:3px;
+    background:#fff; border-radius:50%; transition:.2s; }
   .toggle input:checked + .toggle-slider { background:var(--blue); }
   .toggle input:checked + .toggle-slider:before { transform:translateX(18px); }
-  .config-msg-success { color:var(--green); }
-  .config-msg-error { color:var(--red); }
+
+  /* ── Empty state ── */
+  .empty-state { text-align:center; padding:40px 20px; color:var(--muted); }
+  .empty-state .empty-icon { font-size:2.5rem; margin-bottom:10px; opacity:.6; }
+  .empty-state p { font-size:.82rem; margin-bottom:4px; }
+  .empty-state small { font-size:.7rem; opacity:.7; }
+
+  /* ── Toast notifications ── */
+  .toast-container { position:fixed; top:16px; right:16px; z-index:1000; display:flex; flex-direction:column; gap:8px; max-width:380px; pointer-events:none; }
+  .toast { display:flex; align-items:flex-start; gap:10px; padding:12px 16px; border-radius:var(--radius-sm); font-size:.82rem; line-height:1.4; pointer-events:auto;
+    box-shadow:var(--shadow-lg); backdrop-filter:blur(8px); animation:toast-in .3s ease; }
+  @keyframes toast-in { from{opacity:0;transform:translateX(30px)} to{opacity:1;transform:translateX(0)} }
+  @keyframes toast-out { from{opacity:1;transform:translateX(0)} to{opacity:0;transform:translateX(30px)} }
+  .toast.removing { animation:toast-out .25s ease forwards; }
+  .toast-info { background:#1e3a5f; border:1px solid var(--blue); color:#bfdbfe; }
+  .toast-success { background:#1a2e1a; border:1px solid var(--green); color:#bbf7d0; }
+  .toast-warning { background:#2e2410; border:1px solid var(--yellow); color:#fde68a; }
+  .toast-error { background:#2e1010; border:1px solid var(--red); color:#fecaca; }
+  .toast-icon { font-size:1.1rem; flex-shrink:0; margin-top:1px; }
+  .toast-text { flex:1; }
+
+  /* ── Modal / Confirm dialog ── */
+  .modal-overlay { position:fixed; inset:0; z-index:900; background:rgba(0,0,0,.65); display:flex; align-items:center; justify-content:center; backdrop-filter:blur(2px); }
+  .modal-overlay[x-transition] { transition:opacity .2s ease; }
+  .modal-card { background:var(--card); border:1px solid var(--border); border-radius:var(--radius-lg); padding:24px; min-width:360px; max-width:480px; box-shadow:var(--shadow-lg); }
+  .modal-card h3 { font-size:.95rem; margin-bottom:10px; display:flex; align-items:center; gap:8px; }
+  .modal-card p { font-size:.84rem; color:var(--muted); margin-bottom:20px; line-height:1.5; }
+  .modal-actions { display:flex; gap:10px; justify-content:flex-end; }
+
+  /* ── Shortcuts help ── */
+  .shortcuts-panel { position:fixed; bottom:80px; right:20px; z-index:800; background:var(--card); border:1px solid var(--border); border-radius:var(--radius); padding:16px; box-shadow:var(--shadow-lg); font-size:.78rem; min-width:240px; }
+  .shortcuts-panel kbd { display:inline-block; padding:2px 7px; border-radius:4px; background:var(--bg); border:1px solid var(--border); font-family:var(--font-mono); font-size:.7rem; margin-right:6px; }
+  .shortcuts-panel .shortcut-row { display:flex; justify-content:space-between; align-items:center; padding:4px 0; }
+
+  /* ── Spinner ── */
+  .spinner { display:inline-block; width:14px; height:14px; border:2px solid var(--border); border-top-color:var(--blue); border-radius:50%; animation:spin .6s linear infinite; }
+  @keyframes spin { to{transform:rotate(360deg)} }
+
+  /* ── Scrollbar ── */
+  .scroll { max-height:400px; overflow-y:auto; scroll-behavior:smooth; }
+  .scroll::-webkit-scrollbar { width:5px; }
+  .scroll::-webkit-scrollbar-track { background:transparent; }
+  .scroll::-webkit-scrollbar-thumb { background:var(--border); border-radius:3px; }
+  .scroll::-webkit-scrollbar-thumb:hover { background:var(--border-light); }
+
+  /* ── Footer / shortcuts hint ── */
+  .footer-hint { text-align:center; padding:16px 0 4px; font-size:.68rem; color:var(--muted); opacity:.6; }
+  .footer-hint kbd { font-family:var(--font-mono); padding:1px 5px; border-radius:3px; background:var(--bg); border:1px solid var(--border); font-size:.65rem; }
+
+  /* ── Network status bar ── */
+  .net-warning { text-align:center; padding:6px; background:rgba(239,68,68,.15); border:1px solid rgba(239,68,68,.3); border-radius:var(--radius-sm); font-size:.73rem; color:var(--red); margin-bottom:12px; display:flex; align-items:center; justify-content:center; gap:8px; }
 </style>
 </head>
 <body>
-<div class="app" x-data="dashboard">
+<div class="app" x-data="dashboard" @keydown.window="onKeydown($event)">
 
-  <!-- Header -->
-  <div class="header">
-    <span class="dot" :class="state.state||'idle'"></span>
-    <h1>小智音箱</h1>
-    <span class="tag" x-text="state.state||'idle'"></span>
-    <span style="flex:1"></span>
-    <button class="btn-sm" @click="doWake">唤醒</button>
-    <button class="btn-sm danger" @click="closeWeb">关闭 Web</button>
+  <!-- ════════════ Toast 通知容器 ════════════ -->
+  <div class="toast-container">
+    <template x-for="(t, idx) in toasts" :key="t.id">
+      <div class="toast" :class="[t.type, t.removing?'removing':'']" @click="dismissToast(idx)">
+        <span class="toast-icon" x-text="t.icon"></span>
+        <span class="toast-text" x-text="t.text"></span>
+      </div>
+    </template>
   </div>
 
-  <!-- Grid -->
+  <!-- ════════════ 确认对话框 ════════════ -->
+  <div class="modal-overlay" x-show="confirm.show" x-transition.opacity
+       @click.self="confirm.show=false" @keydown.escape.window="confirm.show=false">
+    <div class="modal-card" @click.stop>
+      <h3><span x-text="confirm.icon||'⚠️'"></span> <span x-text="confirm.title||'确认操作'"></span></h3>
+      <p x-text="confirm.message"></p>
+      <div class="modal-actions">
+        <button class="btn btn-secondary" @click="confirm.show=false">取消</button>
+        <button class="btn" :class="confirm.danger?'btn-danger':'btn-primary'"
+                @click="confirm.show=false; confirm.onConfirm()" x-text="confirm.confirmText||'确认'"></button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ════════════ 快捷键帮助面板 ════════════ -->
+  <div class="shortcuts-panel" x-show="showShortcuts" x-transition @click.outside="showShortcuts=false">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;">
+      <strong style="font-size:.8rem;">⌨ 快捷键</strong>
+      <button class="btn-sm" @click="showShortcuts=false">✕</button>
+    </div>
+    <div class="shortcut-row"><span>发送消息</span><span><kbd>Ctrl</kbd>+<kbd>Enter</kbd></span></div>
+    <div class="shortcut-row"><span>关闭弹窗</span><span><kbd>Esc</kbd></span></div>
+    <div class="shortcut-row"><span>显示此帮助</span><span><kbd>?</kbd></span></div>
+  </div>
+
+  <!-- ════════════ Header ════════════ -->
+  <div class="header">
+    <span class="dot" :class="state.state||'idle'"></span>
+    <span class="logo">🎙️</span>
+    <h1>小智音箱</h1>
+    <span class="tag" x-text="state.state||'idle'"></span>
+    <span class="header-spacer"></span>
+    <button class="btn btn-primary btn-sm" @click="doWake">🔊 唤醒</button>
+    <button class="btn btn-danger btn-sm" @click="confirmCloseWeb">关闭 Web</button>
+  </div>
+
+  <!-- ════════════ 网络错误提示 ════════════ -->
+  <div class="net-warning" x-show="netErrors>=3">
+    <span>⚠️</span> 连接异常，请检查服务是否运行
+    <button class="btn-sm" @click="retryConnection" style="margin-left:8px;">重试</button>
+  </div>
+
+  <!-- ════════════ Grid: 状态卡片 ════════════ -->
   <div class="grid">
 
-    <!-- 状态 -->
+    <!-- 系统状态 -->
     <div class="card">
-      <h2>系统状态</h2>
-      <div class="stat-row"><span>引擎状态</span><span x-text="state.engine_state||'?'"></span></div>
-      <div class="stat-row"><span>交互次数</span><span x-text="state.total_interactions||0"></span></div>
-      <div class="stat-row"><span>错误次数</span><span x-text="state.error_count||0"></span></div>
-      <div class="stat-row"><span>最后唤醒置信度</span><span x-text="(state.last_wake_confidence||0).toFixed(3)"></span></div>
-      <div class="stat-row"><span>最后 ASR</span><span x-text="(state.last_asr_text||'-').slice(0,20)"></span></div>
+      <h2>📊 系统状态</h2>
+      <div class="stat-row"><span>引擎状态</span><span x-text="state.engine_state||'?'" class="stat-val"></span></div>
+      <div class="stat-row"><span>交互次数</span><span class="stat-val" x-text="state.total_interactions||0"></span></div>
+      <div class="stat-row"><span>错误次数</span><span class="stat-val" :class="(state.error_count||0)>0?'':''" x-text="state.error_count||0" :style="(state.error_count||0)>0?'color:var(--red)':''"></span></div>
+      <div class="stat-row"><span>最后唤醒置信度</span><span class="stat-val" x-text="(state.last_wake_confidence||0).toFixed(3)"></span></div>
+      <div class="stat-row"><span>最后 ASR</span><span x-text="(state.last_asr_text||'—').slice(0,24)" style="color:var(--text);"></span></div>
     </div>
 
-    <!-- 音频 -->
+    <!-- 音频电平 -->
     <div class="card">
-      <h2>音频电平</h2>
-      <div class="meter"><div class="meter-bar" :style="{width:(audioPct*100)+'%'}"></div></div>
-      <div class="stat-row"><span>RMS</span><span x-text="state.audio_rms?.toFixed(4)||'0'"></span></div>
-      <div class="stat-row"><span>采集状态</span><span x-text="sys.capture_running ? '✓' : '✗'"></span></div>
-      <div class="stat-row"><span>播放状态</span><span x-text="sys.player_playing ? '播放中' : '空闲'"></span></div>
+      <h2>🎤 音频电平</h2>
+      <div class="meter-wrap">
+        <div class="meter">
+          <div class="meter-bar" :style="{width:(displayPct*100)+'%'}"></div>
+        </div>
+        <div class="meter-label">
+          <span x-text="(state.audio_rms||0).toFixed(4)"></span>
+          <span x-text="'峰值 '+(audioPeak||0).toFixed(4)"></span>
+        </div>
+      </div>
+      <div class="stat-row"><span>采集状态</span><span :style="sys.capture_running?'color:var(--green)':'color:var(--red)'" x-text="sys.capture_running ? '● 采集中' : '○ 已停止'"></span></div>
+      <div class="stat-row"><span>播放状态</span><span x-text="sys.player_playing ? '▶ 播放中' : '■ 空闲'"></span></div>
+      <div class="stat-row"><span>当前电平</span><span class="stat-val" x-text="(state.audio_rms||0).toFixed(4)" :style="{color:state.audio_rms>0.3?'var(--orange)':state.audio_rms>0.1?'var(--yellow)':'var(--muted)'}"></span></div>
     </div>
 
     <!-- 系统资源 -->
     <div class="card">
-      <h2>系统资源</h2>
-      <div class="stat-row"><span>CPU</span><span x-text="(system.cpu_percent||0).toFixed(1)+'%'"></span></div>
-      <div class="meter"><div class="meter-bar" :style="{width:system.cpu_percent+'%'}"></div></div>
-      <div class="stat-row"><span>内存</span><span x-text="(system.memory_used_mb||0)+' / '+(system.memory_total_mb||0)+' MB'"></span></div>
-      <div class="meter"><div class="meter-bar" :style="{width:system.memory_percent+'%'}"></div></div>
-      <div class="stat-row"><span>磁盘可用</span><span x-text="(system.disk_free_gb||0).toFixed(1)+' GB'"></span></div>
+      <h2>💻 系统资源</h2>
+      <div class="stat-row"><span>CPU</span><span class="stat-val" x-text="(system.cpu_percent||0).toFixed(1)+'%'" :style="{color:system.cpu_percent>80?'var(--red)':system.cpu_percent>50?'var(--yellow)':''}"></span></div>
+      <div class="meter-wrap"><div class="meter"><div class="meter-bar" :style="{width:system.cpu_percent+'%'}"></div></div></div>
+      <div class="stat-row"><span>内存</span><span class="stat-val" x-text="(system.memory_used_mb||0)+' / '+(system.memory_total_mb||0)+' MB'"></span></div>
+      <div class="meter-wrap"><div class="meter"><div class="meter-bar" :style="{width:system.memory_percent+'%'}"></div></div></div>
+      <div class="stat-row"><span>磁盘可用</span><span class="stat-val" x-text="(system.disk_free_gb||0).toFixed(1)+' GB'"></span></div>
     </div>
 
   </div>
 
-  <!-- Tabs -->
-  <div class="tabs" style="margin-top:16px">
-    <button class="tab" :class="{active:tab==='chat'}" @click="tab='chat'">对话</button>
-    <button class="tab" :class="{active:tab==='events'}" @click="tab='events'">事件流</button>
-    <button class="tab" :class="{active:tab==='config'}" @click="tab='config'">
-      配置<span x-show="Object.keys(formDirty).length>0" style="color:var(--yellow);margin-left:2px;">*</span>
+  <!-- ════════════ Tabs ════════════ -->
+  <div class="tabs" style="margin-top:20px">
+    <button class="tab" :class="{active:tab==='chat'}" @click="switchTab('chat')">💬 对话</button>
+    <button class="tab" :class="{active:tab==='events'}" @click="switchTab('events')">📡 事件流</button>
+    <button class="tab" :class="{active:tab==='config'}" @click="switchTab('config')">
+      ⚙ 配置<span x-show="Object.keys(formDirty).length>0" style="color:var(--yellow);margin-left:3px;font-size:.7rem;">●</span>
     </button>
   </div>
 
-  <!-- 对话 -->
-  <div class="card" x-show="tab==='chat'">
-    <h2>对话记录</h2>
-    <div class="scroll" x-ref="chatScroll">
+  <!-- ════════════ Tab: 对话 ════════════ -->
+  <div class="card tab-content" x-show="tab==='chat'" x-transition.opacity>
+    <h2>💬 对话记录 <span style="font-weight:400;font-size:.7rem;text-transform:none;letter-spacing:0;" x-show="messages.length>0" x-text="'('+messages.length+' 条)'"></span></h2>
+    <div class="scroll" x-ref="chatScroll" @scroll="onChatScroll()">
       <template x-for="m in messages">
         <div class="msg" :class="m.role">
-          <div class="role" x-text="m.role==='user'?'用户':'小智'"></div>
+          <div style="display:flex;justify-content:space-between;align-items:flex-start;">
+            <div class="role" x-text="m.role==='user'?'👤 用户':'🤖 小智'"></div>
+            <span class="ts" x-text="m.ts||''" x-show="m.ts"></span>
+          </div>
           <div x-text="m.content"></div>
         </div>
       </template>
-      <div x-show="messages.length===0" style="color:var(--muted);font-size:.8rem;">暂无对话</div>
+      <div x-show="messages.length===0" class="empty-state">
+        <div class="empty-icon">💬</div>
+        <p>暂无对话记录</p>
+        <small>唤醒小智或发送文字指令开始对话</small>
+      </div>
+      <!-- 打字动画 -->
+      <div x-show="isAssistantTyping" class="msg assistant" style="opacity:.7;">
+        <div class="role">🤖 小智</div>
+        <div class="typing"><span></span><span></span><span></span></div>
+      </div>
     </div>
     <div class="input-row">
-      <input placeholder="输入文字指令..." @keydown.enter="sendText($el)" x-ref="textInput">
-      <button @click="sendText($refs.textInput)">发送</button>
+      <input placeholder="输入文字指令..." @keydown.enter="sendText($el)" @keydown="onInputKeydown($event,$el)" x-ref="textInput" :disabled="sendingText">
+      <button class="btn btn-primary" @click="sendText($refs.textInput)" :disabled="sendingText">
+        <span class="spinner" x-show="sendingText"></span>
+        <span x-text="sendingText?'发送中':'发送'"></span>
+      </button>
     </div>
   </div>
 
-  <!-- 事件流 -->
-  <div class="card" x-show="tab==='events'">
-    <h2>事件流（最近 100 条）</h2>
+  <!-- ════════════ Tab: 事件流 ════════════ -->
+  <div class="card tab-content" x-show="tab==='events'" x-transition.opacity>
+    <h2>📡 事件流（最近 200 条）</h2>
     <div class="scroll">
       <template x-for="e in events">
         <div class="event">
@@ -180,23 +336,29 @@
           <span class="detail" x-text="eventDetail(e)"></span>
         </div>
       </template>
+      <div x-show="events.length===0" class="empty-state">
+        <div class="empty-icon">📡</div>
+        <p>暂无事件</p>
+        <small>唤醒小智后事件将在此实时显示</small>
+      </div>
     </div>
   </div>
 
-  <!-- 配置 -->
-  <div class="card" x-show="tab==='config'">
-    <div style="display:flex;gap:8px;align-items:center;margin-bottom:12px;">
-      <h2 style="flex:1;margin:0;">配置</h2>
-      <button class="btn-sm" @click="configTab='form'" :class="{active:configTab==='form'}">表单</button>
-      <button class="btn-sm" @click="configTab='raw'" :class="{active:configTab==='raw'}">JSON</button>
-      <label style="font-size:.75rem;color:var(--muted);display:flex;align-items:center;gap:4px;">
-        <input type="checkbox" x-model="showAdvanced"> 高级
+  <!-- ════════════ Tab: 配置 ════════════ -->
+  <div class="card tab-content" x-show="tab==='config'" x-transition.opacity>
+    <div style="display:flex;gap:8px;align-items:center;margin-bottom:14px;">
+      <h2 style="flex:1;margin:0;">⚙ 配置管理</h2>
+      <button class="btn-sm" @click="configTab='form'" :class="{active:configTab==='form'}">📋 表单</button>
+      <button class="btn-sm" @click="configTab='raw'" :class="{active:configTab==='raw'}">{ } JSON</button>
+      <label style="font-size:.73rem;color:var(--muted);display:flex;align-items:center;gap:4px;cursor:pointer;">
+        <input type="checkbox" x-model="showAdvanced"> 高级选项
       </label>
     </div>
 
-    <!-- 结构化表单 -->
-    <div x-show="configTab==='form' && configLoading" style="text-align:center;padding:40px;color:var(--muted);font-size:.85rem;">
-      加载配置中...
+    <!-- 结构化表单模式 -->
+    <div x-show="configTab==='form' && configLoading" class="empty-state">
+      <div class="spinner" style="width:24px;height:24px;border-width:3px;margin:0 auto 12px;"></div>
+      <p>加载配置中...</p>
     </div>
 
     <div x-show="configTab==='form' && !configLoading">
@@ -208,13 +370,13 @@
       </div>
 
       <!-- 字段列表 -->
-      <div class="scroll" style="max-height:400px;">
+      <div class="scroll" style="max-height:420px;">
         <template x-for="field in visibleFields" :key="field.key">
           <div class="config-field" :class="{error: formErrors[field.key]}">
             <label class="config-label">
               <span x-text="field.label"></span>
-              <span x-show="field.restart_required" class="restart-badge">需重启</span>
-              <span x-show="!field.restart_required" class="no-restart-badge">热生效</span>
+              <span x-show="field.restart_required" class="badge badge-restart">需重启</span>
+              <span x-show="!field.restart_required" class="badge badge-hot">热生效</span>
             </label>
             <span class="config-desc" x-text="field.description" x-show="field.description"></span>
 
@@ -240,25 +402,23 @@
 
             <!-- Enum -->
             <template x-if="field.type==='enum'">
-              <select x-init="$nextTick(() => { $el.value = formValues[field.key] || field.default })"
-                      @change="formValues[field.key]=$event.target.value;formDirty[field.key]=true;delete formErrors[field.key]"
+              <select @change="formValues[field.key]=$event.target.value;formDirty[field.key]=true;delete formErrors[field.key]"
                       class="config-select">
                 <template x-for="opt in field.enum_values" :key="opt">
-                  <option :value="opt" x-text="opt"></option>
+                  <option :value="opt" :selected="(formValues[field.key]||field.default)==opt" x-text="opt"></option>
                 </template>
               </select>
             </template>
 
-            <!-- Device select (动态设备列表) -->
+            <!-- Device select -->
             <template x-if="field.type==='device_select'">
-              <select x-init="$nextTick(() => { $el.value = formValues[field.key] || field.default })"
-                      @change="formValues[field.key]=$event.target.value;formDirty[field.key]=true;delete formErrors[field.key]"
+              <select @change="formValues[field.key]=$event.target.value;formDirty[field.key]=true;delete formErrors[field.key]"
                       class="config-select">
-                <option value="">系统默认（留空）</option>
+                <option value="" :selected="!formValues[field.key]">系统默认（留空）</option>
                 <template x-for="dev in (audioDevices[field.device_type]||[])">
-                  <option :value="dev.name"
+                  <option :value="dev.name" :selected="formValues[field.key]===dev.name"
                           x-text="dev.name + ' (' + dev.channels + 'ch)'
-                                  + (dev.name==='default'||dev.name==='pulse'?' ★推荐':'')
+                                  + (dev.name=='default'||dev.name=='pulse'?' ★推荐':'')
                                   + (dev.name.includes('hw:')?' [硬件直连]':'')"></option>
                 </template>
               </select>
@@ -297,29 +457,40 @@
             <span class="field-error" x-text="formErrors[field.key]" x-show="formErrors[field.key]"></span>
           </div>
         </template>
-        <div x-show="visibleFields.length===0" style="padding:20px;text-align:center;color:var(--muted);font-size:.8rem;">
-          该分类下没有可显示的字段<br><small>尝试开启"高级"选项</small>
+        <div x-show="visibleFields.length===0" class="empty-state">
+          <div class="empty-icon">📂</div>
+          <p>该分类下没有可显示的字段</p>
+          <small>尝试开启"高级选项"查看全部配置</small>
         </div>
       </div>
 
       <!-- 保存栏 -->
-      <div class="input-row" style="margin-top:12px;padding-top:12px;border-top:1px solid var(--border);">
-        <button @click="saveFormConfig" :disabled="saving" x-text="saving?'保存中...':'保存配置'"></button>
-        <span style="font-size:.75rem;align-self:center;" x-text="configMsg"
-              :class="configMsg.includes('失败')||configMsg.startsWith('✗')?'config-msg-error':'config-msg-success'"></span>
-        <span style="font-size:.7rem;color:var(--muted);align-self:center;" x-show="Object.keys(formDirty).length>0"
+      <div class="input-row" style="margin-top:14px;padding-top:14px;border-top:1px solid var(--border);">
+        <button class="btn btn-primary" @click="saveFormConfig" :disabled="saving">
+          <span class="spinner" x-show="saving"></span>
+          <span x-text="saving?'保存中...':'💾 保存配置'"></span>
+        </button>
+        <span style="font-size:.75rem;" x-text="configMsg"
+              :style="{color:configMsg.includes('失败')||configMsg.startsWith('✗')?'var(--red)':'var(--green)'}"></span>
+        <span style="font-size:.7rem;color:var(--muted);" x-show="Object.keys(formDirty).length>0"
               x-text="Object.keys(formDirty).length+' 项已修改'"></span>
       </div>
     </div>
 
     <!-- JSON 编辑模式 -->
     <div x-show="configTab==='raw'">
-      <textarea class="config-area" x-model="configText"></textarea>
+      <textarea class="config-area" x-model="configText" placeholder="加载中..."></textarea>
       <div class="input-row">
-        <button @click="saveConfig">保存配置</button>
-        <span style="font-size:.75rem;color:var(--muted);align-self:center;" x-text="configMsg"></span>
+        <button class="btn btn-primary" @click="saveConfig">💾 保存配置</button>
+        <span style="font-size:.75rem;" x-text="configMsg"
+              :style="{color:configMsg.includes('失败')||configMsg.startsWith('✗')?'var(--red)':'var(--green)'}"></span>
       </div>
     </div>
+  </div>
+
+  <!-- ════════════ 页脚快捷键提示 ════════════ -->
+  <div class="footer-hint">
+    按 <kbd>?</kbd> 显示快捷键 &nbsp;|&nbsp; <kbd>Ctrl</kbd>+<kbd>Enter</kbd> 发送 &nbsp;|&nbsp; <kbd>Esc</kbd> 关闭弹窗
   </div>
 
 </div>
@@ -327,6 +498,7 @@
 <script>
 document.addEventListener('alpine:init', () => {
   Alpine.data('dashboard', () => ({
+    // ── 核心状态 ──
     state: {},
     events: [],
     messages: [],
@@ -336,9 +508,28 @@ document.addEventListener('alpine:init', () => {
     configText: '',
     configMsg: '',
     audioPct: 0,
+    audioPeak: 0,
+    displayPct: 0,
     seq: 0,
     _pollTimer: null,
-    // 结构化表单
+    _peakDecayTimer: null,
+    _lastMsgCount: 0,
+    _userScrolledUp: false,
+
+    // ── Toast 系统 ──
+    toasts: [],
+    _toastId: 0,
+
+    // ── 确认对话框 ──
+    confirm: { show:false, title:'', message:'', icon:'', danger:false, confirmText:'确认', onConfirm:()=>{} },
+
+    // ── 快捷键 ──
+    showShortcuts: false,
+
+    // ── 网络状态 ──
+    netErrors: 0,
+
+    // ── 结构化表单 ──
     schema: [],
     categories: [],
     activeCategory: null,
@@ -351,12 +542,19 @@ document.addEventListener('alpine:init', () => {
     configLoading: true,
     audioDevices: {input: [], output: []},
 
+    // ── 发送状态 ──
+    sendingText: false,
+    isAssistantTyping: false,
+
+    // ═══════════════ 初始化 ═══════════════
+
     async init() {
       await this.loadInitialState();
       this.startPolling();
       this.fetchDevices();
       await this.loadSchema();
       await this.fetchConfig();
+      this.startPeakDecay();
       window.addEventListener('beforeunload', (e) => {
         if (Object.keys(this.formDirty).length > 0) {
           e.preventDefault();
@@ -365,13 +563,14 @@ document.addEventListener('alpine:init', () => {
       });
     },
 
-    // ---- 实时轮询 (300ms 间隔, 轮询 /api/status) ----
+    // ═══════════════ 轮询 ═══════════════
 
     async loadInitialState() {
       try {
         const data = await fetch('/api/status').then(r=>r.json());
         this.applyState(data);
         this.seq = data._seq || 0;
+        this.netErrors = 0;
       } catch(e) { console.error('loadInitialState:', e); }
     },
 
@@ -384,36 +583,79 @@ document.addEventListener('alpine:init', () => {
       try {
         const data = await fetch('/api/status').then(r=>r.json());
         if (!data) return;
-        // 状态全量刷新
+        this.netErrors = 0;
         this.applyState(data);
-        // 事件增量合并
         const newSeq = data._seq || 0;
         if (newSeq > (this.seq || 0)) {
           this.mergeEvents(data._events || []);
           this.seq = newSeq;
         }
-      } catch(e) { /* 忽略偶发网络错误 */ }
+      } catch(e) {
+        this.netErrors++;
+      }
     },
 
     applyState(s) {
       if (!s) return;
+      const prevState = this.state.state;
+      const prevAsr = this.state.last_asr_text;
+      const prevWake = this.state.last_wake_confidence;
+
       this.state = s;
-      this.audioPct = Math.min(1, (s.audio_rms || 0) / 0.5);
+
+      // 音频峰值
+      const newPct = Math.min(1, (s.audio_rms || 0) / 0.5);
+      this.audioPct = newPct;
+      if (newPct > this.audioPeak) this.audioPeak = newPct;
+      // displayPct 取当前值和峰值的较大者
+      this.displayPct = Math.max(this.audioPct, this.audioPeak);
+
+      // 系统信息
       this.applySystem(s.system);
+
+      // Toast: 状态变化
+      if (prevState && prevState !== s.state) {
+        const labels = {idle:'待机',listening:'聆听中',thinking:'思考中',speaking:'播报中',muted:'已静音',error:'错误'};
+        this.addToast(`状态: ${labels[s.state] || s.state}`, 'info', '🔔');
+        if (s.state === 'thinking') this.isAssistantTyping = true;
+        else this.isAssistantTyping = false;
+      }
+
+      // Toast: ASR 识别结果
+      if (prevAsr !== s.last_asr_text && s.last_asr_text && !s.last_asr_text.startsWith('[识别中]')) {
+        this.addToast(`识别: ${s.last_asr_text.slice(0,40)}`, 'success', '🎤');
+      }
+
+      // Toast: 唤醒
+      if (s.last_wake_confidence > 0 && s.last_wake_confidence !== prevWake) {
+        this.addToast(`唤醒! 置信度 ${s.last_wake_confidence.toFixed(2)}`, 'success', '🎯');
+      }
+
+      // 消息更新
       if (s.messages) {
-        const prev = this.messages.length;
-        this.messages = s.messages;
-        if (this.messages.length !== prev) {
-          this.$nextTick(() => {
-            const el = this.$refs.chatScroll;
-            if (el) el.scrollTop = el.scrollHeight;
-          });
+        const prevLen = this.messages.length;
+        // 用 Map 保留已有消息的时间戳，只给新消息分配当前时间
+        const oldTs = new Map();
+        for (const m of this.messages) {
+          if (m.ts) oldTs.set(m.role + '|' + m.content, m.ts);
+        }
+        const now = new Date();
+        const freshTs = now.toLocaleTimeString('zh-CN', {hour:'2-digit',minute:'2-digit',second:'2-digit'});
+        this.messages = s.messages.map(m => {
+          const key = m.role + '|' + m.content;
+          return {...m, ts: oldTs.get(key) || freshTs};
+        });
+        if (this.messages.length !== prevLen && prevLen > 0) {
+          this.isAssistantTyping = false;
+          if (!this._userScrolledUp) {
+            this.$nextTick(() => this.scrollChatBottom());
+          }
         }
       }
     },
 
     applySystem(sys) {
-      if (!sys || !('cpu_percent' in sys)) return;  // psutil 不可用则跳过
+      if (!sys || !('cpu_percent' in sys)) return;
       this.system = sys;
     },
 
@@ -425,20 +667,164 @@ document.addEventListener('alpine:init', () => {
       if (this.events.length > 200) this.events.length = 200;
     },
 
-    async sendText(el) {
-      const text = el.value.trim();
-      if (!text) return;
-      el.value = '';
-      await fetch('/api/text', {
-        method:'POST',
-        headers:{'Content-Type':'application/json'},
-        body: JSON.stringify({text}),
-      });
+    // ═══════════════ 峰值衰减 ═══════════════
+
+    startPeakDecay() {
+      if (this._peakDecayTimer) return;
+      this._peakDecayTimer = setInterval(() => {
+        if (this.audioPeak > 0.001) {
+          this.audioPeak = Math.max(0, this.audioPeak - 0.015);
+          this.displayPct = Math.max(this.audioPct, this.audioPeak);
+        }
+      }, 80);
     },
 
-    async doWake() {
-      await fetch('/api/wake', { method:'POST' });
+    // ═══════════════ 聊天滚动 ═══════════════
+
+    onChatScroll() {
+      const el = this.$refs.chatScroll;
+      if (!el) return;
+      // 用户在距底部 40px 以内视为"在底部"
+      this._userScrolledUp = (el.scrollHeight - el.scrollTop - el.clientHeight) > 40;
     },
+
+    scrollChatBottom() {
+      const el = this.$refs.chatScroll;
+      if (el) el.scrollTop = el.scrollHeight;
+    },
+
+    // ═══════════════ 发送文字 ═══════════════
+
+    onInputKeydown(e, el) {
+      if (e.ctrlKey && e.key === 'Enter') {
+        e.preventDefault();
+        this.sendText(el);
+      }
+    },
+
+    async sendText(el) {
+      const text = el.value.trim();
+      if (!text || this.sendingText) return;
+      this.sendingText = true;
+      el.value = '';
+      try {
+        await fetch('/api/text', {
+          method:'POST',
+          headers:{'Content-Type':'application/json'},
+          body: JSON.stringify({text}),
+        });
+        this.isAssistantTyping = true;
+        this._userScrolledUp = false;
+        this.$nextTick(() => this.scrollChatBottom());
+      } catch(e) {
+        this.addToast('发送失败，请检查连接', 'error', '❌');
+      } finally {
+        this.sendingText = false;
+      }
+    },
+
+    // ═══════════════ 唤醒 ═══════════════
+
+    async doWake() {
+      try {
+        await fetch('/api/wake', { method:'POST' });
+        this.addToast('已发送唤醒指令', 'info', '📢');
+      } catch(e) {
+        this.addToast('唤醒失败', 'error', '❌');
+      }
+    },
+
+    // ═══════════════ 关闭 Web ═══════════════
+
+    confirmCloseWeb() {
+      this.confirm = {
+        show: true,
+        title: '关闭 Web 面板',
+        icon: '⚠️',
+        message: '关闭后 Web 面板将停止服务，需要通过修改配置文件或重启来重新启用。确定要继续吗？',
+        danger: true,
+        confirmText: '确认关闭',
+        onConfirm: () => this.closeWeb(),
+      };
+    },
+
+    async closeWeb() {
+      try {
+        const r = await fetch('/api/config', {
+          method:'POST',
+          headers:{'Content-Type':'application/json'},
+          body: JSON.stringify({web:{enabled:false}}),
+        }).then(r=>r.json());
+        if (r.ok) {
+          this.addToast('Web 面板已关闭，重启后生效', 'warning', '🔌');
+        } else {
+          this.addToast('关闭失败: ' + (r.error||''), 'error', '❌');
+        }
+      } catch(e) {
+        this.addToast('请求失败', 'error', '❌');
+      }
+    },
+
+    // ═══════════════ 重试连接 ═══════════════
+
+    async retryConnection() {
+      this.netErrors = 0;
+      await this.loadInitialState();
+      if (this.netErrors === 0) {
+        this.addToast('连接已恢复', 'success', '✅');
+      }
+    },
+
+    // ═══════════════ Toast 系统 ═══════════════
+
+    addToast(text, type='info', icon='') {
+      const icons = {info:'ℹ️', success:'✅', warning:'⚠️', error:'❌'};
+      const id = ++this._toastId;
+      this.toasts.push({ id, text, type: 'toast-'+type, icon: icon || icons[type]||'ℹ️', removing:false });
+      // 3 秒后自动消失
+      setTimeout(() => this.dismissToastById(id), 3000);
+    },
+
+    dismissToast(idx) {
+      if (idx >= 0 && idx < this.toasts.length) {
+        this.toasts[idx].removing = true;
+        setTimeout(() => { this.toasts.splice(idx, 1); }, 260);
+      }
+    },
+
+    dismissToastById(id) {
+      const idx = this.toasts.findIndex(t => t.id === id);
+      if (idx >= 0) this.dismissToast(idx);
+    },
+
+    // ═══════════════ Tab 切换 ═══════════════
+
+    switchTab(t) {
+      this.tab = t;
+      if (t === 'chat') {
+        this.$nextTick(() => this.scrollChatBottom());
+      }
+    },
+
+    // ═══════════════ 键盘快捷键 ═══════════════
+
+    onKeydown(e) {
+      // Esc: 关闭弹窗/对话框
+      if (e.key === 'Escape') {
+        if (this.confirm.show) { this.confirm.show = false; return; }
+        if (this.showShortcuts) { this.showShortcuts = false; return; }
+      }
+      // ?: 显示快捷键帮助 (非输入框内)
+      if (e.key === '?' && !e.ctrlKey && !e.metaKey && !e.altKey) {
+        const tag = document.activeElement?.tagName;
+        if (tag !== 'INPUT' && tag !== 'TEXTAREA' && tag !== 'SELECT') {
+          e.preventDefault();
+          this.showShortcuts = !this.showShortcuts;
+        }
+      }
+    },
+
+    // ═══════════════ 工具函数 ═══════════════
 
     fmtTime(ts) {
       const d = new Date((ts||0)*1000);
@@ -447,13 +833,16 @@ document.addEventListener('alpine:init', () => {
 
     eventDetail(e) {
       const d = e || {};
-      if (d.text) return d.text.slice(0,40);
-      if (d.partial_text) return d.partial_text.slice(0,40);
-      if (d.confidence) return 'conf=' + d.confidence.toFixed(3);
-      if (d.error) return d.error.slice(0,40);
-      if (d.to) return d.from + '→' + d.to;
+      if (d.text) return d.text.slice(0,50);
+      if (d.partial_text) return '[部分] ' + d.partial_text.slice(0,40);
+      if (d.confidence) return '置信度=' + (typeof d.confidence==='number'?d.confidence.toFixed(3):d.confidence);
+      if (d.error) return '⚠ ' + d.error.slice(0,50);
+      if (d.to) return d.from + ' → ' + d.to;
+      if (d.chunk) return '[chunk] ' + d.chunk.slice(0,40);
       return '';
     },
+
+    // ═══════════════ 设备列表 ═══════════════
 
     async fetchDevices() {
       try {
@@ -461,22 +850,20 @@ document.addEventListener('alpine:init', () => {
       } catch(e) { console.error('fetchDevices:', e); }
     },
 
+    // ═══════════════ 配置获取 ═══════════════
+
     async fetchConfig() {
       try {
         const cfg = await fetch('/api/config').then(r=>r.json());
         this.configText = JSON.stringify(cfg || {}, null, 2);
-        // 从 API 加载实际配置值
         this.formValues = this.configToFlat(cfg || {});
-        // 用 schema 默认值填充 schema 中有但 config 中缺失的 key
         for (const f of this.schema) {
           if (!(f.key in this.formValues)) {
             this.formValues[f.key] = f.default;
           }
-          // 脱敏字段置空，避免显示 *** 误导用户
           if (f.type === 'secret' && this.formValues[f.key] === '***') {
             this.formValues[f.key] = '';
           }
-          // 设备字段保持 null → 前端显示"系统默认"
         }
       } catch(e) {
         console.error('fetchConfig:', e);
@@ -517,11 +904,7 @@ document.addEventListener('alpine:init', () => {
       );
     },
 
-    setFormValue(key, value) {
-      this.formValues[key] = value;
-      this.formDirty[key] = true;
-      delete this.formErrors[key];
-    },
+    // ═══════════════ 配置保存 ═══════════════
 
     async saveFormConfig() {
       this.saving = true;
@@ -530,6 +913,7 @@ document.addEventListener('alpine:init', () => {
         const updates = this.buildNestedUpdates();
         if (Object.keys(updates).length === 0) {
           this.configMsg = '没有变更需要保存';
+          this.addToast('没有变更需要保存', 'info');
           this.saving = false;
           return;
         }
@@ -540,19 +924,20 @@ document.addEventListener('alpine:init', () => {
         }).then(r=>r.json());
         if (r.ok) {
           const n = (r.changed_keys||[]).length;
-          this.configMsg = n + ' 项已保存';
+          this.configMsg = '✓ ' + n + ' 项已保存';
           this.formDirty = {};
+          this.addToast(`${n} 项配置已保存`, 'success', '💾');
           await this.fetchConfig();
         } else {
-          this.configMsg = (r.error||'保存失败');
+          const err = r.error||'保存失败';
+          this.configMsg = '✗ ' + err;
+          this.addToast('保存失败: ' + err, 'error', '❌');
         }
       } catch(e) {
-        this.configMsg = '请求失败';
+        this.configMsg = '✗ 请求失败';
+        this.addToast('请求失败，请检查连接', 'error', '❌');
       } finally {
         this.saving = false;
-        if (this.configMsg.startsWith('✓') || (!isNaN(this.configMsg[0]) && this.configMsg.includes('项'))) {
-          setTimeout(() => { if (this.configMsg && !this.configMsg.startsWith('✗')) this.configMsg = ''; }, 3000);
-        }
       }
     },
 
@@ -570,19 +955,6 @@ document.addEventListener('alpine:init', () => {
       return result;
     },
 
-    async closeWeb() {
-      try {
-        const r = await fetch('/api/config', {
-          method:'POST',
-          headers:{'Content-Type':'application/json'},
-          body: JSON.stringify({web:{enabled:false}}),
-        }).then(r=>r.json());
-        this.configMsg = r.ok ? 'Web 已关闭，重启后生效' : '✗ ' + (r.error||'');
-      } catch(e) {
-        this.configMsg = '✗ 请求失败';
-      }
-    },
-
     async saveConfig() {
       try {
         const updates = JSON.parse(this.configText);
@@ -591,10 +963,17 @@ document.addEventListener('alpine:init', () => {
           headers:{'Content-Type':'application/json'},
           body: JSON.stringify(updates),
         }).then(r=>r.json());
-        this.configMsg = r.ok ? '✓ 已保存' : '✗ ' + (r.error||'');
-        if (r.ok) setTimeout(() => this.configMsg = '', 3000);
+        if (r.ok) {
+          this.configMsg = '✓ 已保存';
+          this.addToast('配置已保存', 'success', '💾');
+          setTimeout(() => this.configMsg = '', 3000);
+        } else {
+          this.configMsg = '✗ ' + (r.error||'');
+          this.addToast('保存失败: ' + (r.error||''), 'error', '❌');
+        }
       } catch(e) {
         this.configMsg = '✗ JSON 格式错误';
+        this.addToast('JSON 格式错误', 'error', '❌');
       }
     },
   }));
