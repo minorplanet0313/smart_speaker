@@ -126,6 +126,11 @@ class WebEventCollector:
                 samples = eng._audio_level_samples
                 if samples > 0:
                     s["audio_rms"] = round(eng._audio_level_rms_sum / samples, 4)
+            # 采集/播放状态
+            s["sys"] = {
+                "capture_running": bool(eng.audio_capture and eng.audio_capture.is_running),
+                "player_playing": bool(eng.audio_player and eng.audio_player.is_playing),
+            }
         return s
 
     def get_history(self, n: int = 50) -> list:
