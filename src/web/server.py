@@ -52,7 +52,18 @@ class WebServer:
             name="web-server",
         )
         self._thread.start()
-        logger.info(f"Web UI: http://{self.host}:{self.port}")
+        # 显示实际可访问地址
+        local_url = f"http://localhost:{self.port}"
+        addrs = [local_url]
+        try:
+            import socket
+            hostname = socket.gethostname()
+            lan_ip = socket.gethostbyname(hostname)
+            if lan_ip and not lan_ip.startswith("127."):
+                addrs.append(f"http://{lan_ip}:{self.port}")
+        except Exception:
+            pass
+        logger.info(f"Web 面板: {', '.join(addrs)}")
 
     def stop(self) -> None:
         self._running = False
@@ -204,7 +215,7 @@ class WebServer:
 
         self._httpd = make_server(self.host, self.port, app,
                                   handler_class=QuietHandler)
-        logger.info(f"Web 服务器已启动: http://{self.host}:{self.port}")
+        logger.info(f"Web 服务器已启动 (bind={self.host}:{self.port})")
         try:
             self._httpd.serve_forever(poll_interval=0.5)
         except Exception as e:

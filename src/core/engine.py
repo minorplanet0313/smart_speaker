@@ -373,7 +373,7 @@ class SmartSpeakerEngine:
             port=web_config.get("port", 8080),
         )
         self.web_server.start()
-        logger.info(f"Web 管理面板: http://{web_config.get('host', '0.0.0.0')}:{web_config.get('port', 8080)}")
+        # 日志已由 WebServer.start() 输出，此处不再重复
 
     # ================================================================
     # 事件连接
